@@ -30,6 +30,10 @@ TEST_DB_PATH = "./test_smartroad_pytest.db"
 TEST_DB_URL = f"sqlite:///{TEST_DB_PATH}"
 
 os.environ["DATABASE_URL"] = TEST_DB_URL
+# Explicitly unset YOLO_MODEL_PATH so the inference engine starts unconfigured.
+# Tests in TestInferNoModel assert model_not_configured behaviour; a real model
+# must not be loaded even when backend/.env happens to contain a valid path.
+os.environ["YOLO_MODEL_PATH"] = ""
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DEBUG", "True")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")

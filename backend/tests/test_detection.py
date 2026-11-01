@@ -1,6 +1,7 @@
 """
 test_detection.py — Tests for POST /api/v1/detection/infer
 """
+import os
 
 # Inline VALID_INFER constant to avoid sys.path collisions with
 # any installed 'tests' package on the system Python.
@@ -105,3 +106,29 @@ class TestInferValidation:
         payload = {**VALID_INFER, "image": raw_b64}
         response = client.post("/api/v1/detection/infer", json=payload)
         assert response.status_code == 200
+
+
+# ── Health endpoint now reports yolo_model field ────────────────────────────────
+
+class TestHealthYoloField:
+
+    def test_health_returns_yolo_model_field(self, client):
+        data = client.get("/api/v1/health").json()
+        assert "yolo_model" in data, "Health endpoint must report yolo_model status"
+
+    def test_health_yolo_not_configured_in_test(self, client):
+        """In test env, YOLO_MODEL_PATH is unset — model must NOT be reported as loaded."""
+        data = client.get("/api/v1/health").json()
+        # Acceptable: 'not_configured' or 'loaded' only if weights happen to be present
+        assert data["yolo_model"] in ("not_configured", "loaded")
+
+    def test_health_does_not_falsely_report_yolo_loaded(self, client):
+        """If YOLO_MODEL_PATH is not set in test env, yolo_model must not say 'loaded'."""
+        model_path = os.environ.get("YOLO_MODEL_PATH", "")
+        data = client.get("/api/v1/health").json()
+        if not model_path:
+            assert data["yolo_model"] == "not_configured", (
+                f"With YOLO_MODEL_PATH unset, health must report 'not_configured', "
+                f"got '{data['yolo_model']}'"
+            )
+

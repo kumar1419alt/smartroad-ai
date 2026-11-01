@@ -229,8 +229,9 @@ class DetectionBox(BaseModel):
 
 
 class DetectionItem(BaseModel):
-    class_id: str
+    class_id: int
     class_name: str
+    damage_code: str  # RDD2022 code: D00, D10, D20, D40
     confidence: float = Field(..., ge=0.0, le=1.0)
     box: DetectionBox
     severity: str
@@ -277,5 +278,6 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     version: str
     database: str
+    yolo_model: str = "not_configured"
     environment: str
     timestamp: str

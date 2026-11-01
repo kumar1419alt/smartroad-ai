@@ -1,31 +1,53 @@
 /**
- * DamageAnalysisCard.jsx — Reusable AI Damage Analysis Preview Card.
+ * DamageAnalysisCard.jsx — AI Damage Analysis Preview Card.
  *
+ * Displays real YOLOv8m-RDD2022 inference results from the FastAPI backend.
  * Shows:
- *  - AI Computer Vision prediction output (POST /predict simulation)
- *  - Bounding Box visualization over the road image
- *  - Damage type & classification confidence percentage
- *  - Severity indicator
- *  - Estimated physical dimensions (depth, width, surface area)
+ *  - Actual model name from API response
+ *  - Real confidence score from YOLO detection
+ *  - Detected damage class (D00/D10/D20/D40) and severity
+ *  - Bounding boxes at API-reported percentage coordinates
+ *  - Inference time in milliseconds
+ *
+ * Physical dimensions (depth, width, area) are NOT shown because they
+ * cannot be reliably measured from a single uncalibrated 2-D image.
+ *
+ * If the backend is unavailable the card shows a clear offline notice
+ * without fabricating predictions.
  */
 
 import React from 'react'
 import {
   Brain,
   Scan,
-  ShieldCheck,
   AlertTriangle,
-  Ruler,
+  Wifi,
+  WifiOff,
+  Clock,
   Layers,
   Sparkles,
+  Info,
 } from 'lucide-react'
 import SeverityIndicator from './SeverityIndicator'
+
+// RDD2022 damage code colours matching detectionService.js
+const DAMAGE_COLORS = {
+  D00: '#f97316', // Orange — Longitudinal Crack
+  D10: '#eab308', // Yellow — Transverse Crack
+  D20: '#ef4444', // Red    — Alligator Crack
+  D40: '#dc2626', // DarkRed — Pothole
+}
+
+function damageColor(code) {
+  return DAMAGE_COLORS[code] || '#64748b'
+}
 
 export default function DamageAnalysisCard({
   analysis,
   imagePreview,
   isAnalyzing = false,
 }) {
+  // ── Loading state ────────────────────────────────────────────────────
   if (isAnalyzing) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs text-center space-y-3">
@@ -33,37 +55,84 @@ export default function DamageAnalysisCard({
           <Scan size={24} className="animate-spin" />
         </div>
         <h3 className="text-sm font-bold text-slate-800">
-          AI Vision Model Scanning Image…
+          YOLOv8m Scanning Image…
         </h3>
         <p className="text-xs text-slate-500 max-w-sm mx-auto">
-          Executing convolutional neural network inference: detecting road damage boundaries, depth profile, and severity.
+          Sending frame to FastAPI backend — detecting RDD2022 road damage classes.
         </p>
       </div>
     )
   }
 
+  // ── Empty state ──────────────────────────────────────────────────────
   if (!analysis) {
     return (
       <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6 text-center space-y-2">
         <Brain size={24} className="text-slate-400 mx-auto" />
         <h3 className="text-xs font-bold text-slate-700">AI Damage Analysis Preview</h3>
         <p className="text-[11px] text-slate-400 max-w-xs mx-auto">
-          Upload or select a road image to trigger instant AI vision classification & bounding box overlay.
+          Upload or select a road image to trigger YOLOv8m-RDD2022 inference via the backend API.
         </p>
       </div>
     )
   }
 
   const {
-    damageType = 'Pothole',
-    confidence = 0.964,
-    severity = 'critical',
+    damageType = 'Unknown',
+    damageCode = null,
+    confidence = 0,
+    severity = 'medium',
+    model = 'YOLOv8m-RDD2022',
+    inferenceTimeMs = 0,
+    status = 'success',
     boundingBoxes = [],
-    dimensions = { depthCm: 14.5, widthCm: 52, areaSqM: 0.58 },
-    recommendedAction = 'Hot-mix asphalt patching within 48h',
+    detectionCount = 0,
+    backendUnavailable = false,
   } = analysis
 
-  const confidencePct = Math.round(confidence * 1000) / 10
+  const confidencePct = confidence > 0 ? `${Math.round(confidence * 1000) / 10}%` : '—'
+  const isNoDetection = detectionCount === 0 && status === 'success'
+  const isBackendIssue = backendUnavailable || status === 'backend_unavailable'
+  const isModelMissing = status === 'model_not_configured'
+
+  // ── Backend offline notice ───────────────────────────────────────────
+  if (isBackendIssue) {
+    return (
+      <div className="bg-white rounded-2xl border border-amber-200 p-6 shadow-xs space-y-3">
+        <div className="flex items-center gap-2 text-amber-700">
+          <WifiOff size={18} />
+          <h3 className="text-sm font-bold">Backend Unavailable</h3>
+        </div>
+        <p className="text-xs text-slate-500">
+          Could not reach the FastAPI inference backend at{' '}
+          <code className="bg-slate-100 px-1 rounded">http://127.0.0.1:8000</code>.
+          Start the backend with:
+        </p>
+        <pre className="text-[10px] bg-slate-100 rounded-lg p-2 text-slate-700 overflow-x-auto">
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+        </pre>
+        <p className="text-[11px] text-slate-400">
+          No predictions are shown — this system does not fabricate detections.
+        </p>
+      </div>
+    )
+  }
+
+  // ── Model not configured notice ──────────────────────────────────────
+  if (isModelMissing) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-3">
+        <div className="flex items-center gap-2 text-slate-600">
+          <Info size={18} />
+          <h3 className="text-sm font-bold">Model Weights Not Loaded</h3>
+        </div>
+        <p className="text-xs text-slate-500">
+          The backend is running but <code>YOLO_MODEL_PATH</code> is not configured.
+          Copy <code>best.pt</code> to <code>backend/weights/</code> and restart the server.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden space-y-4 p-5">
@@ -78,18 +147,32 @@ export default function DamageAnalysisCard({
               AI Vision Analysis Result
             </h3>
             <span className="text-[10px] text-slate-400 font-mono">
-              Model: ResNet-RoadVision-v2.3 (POST /predict)
+              {model}
             </span>
           </div>
         </div>
 
-        <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
-          <Sparkles size={12} />
-          {confidencePct}% Confidence
-        </span>
+        {confidence > 0 ? (
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+            <Sparkles size={12} />
+            {confidencePct}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
+            No detection
+          </span>
+        )}
       </div>
 
-      {/* Image with Bounding Box Overlay */}
+      {/* Inference time badge */}
+      {inferenceTimeMs > 0 && (
+        <div className="flex items-center gap-1 text-[10px] text-slate-400 -mt-2">
+          <Clock size={10} />
+          <span>Inference: {inferenceTimeMs} ms</span>
+        </div>
+      )}
+
+      {/* Image with Real Bounding Box Overlay */}
       {imagePreview && (
         <div className="relative rounded-xl overflow-hidden border border-slate-300 bg-black aspect-video max-h-56">
           <img
@@ -98,23 +181,55 @@ export default function DamageAnalysisCard({
             className="w-full h-full object-cover"
           />
 
-          {/* Render Bounding Boxes */}
-          {boundingBoxes.map((item) => (
-            <div
-              key={item.id}
-              style={{
-                left: `${item.box.x}%`,
-                top: `${item.box.y}%`,
-                width: `${item.box.w}%`,
-                height: `${item.box.h}%`,
-              }}
-              className="absolute border-2 border-red-500 bg-red-500/20 rounded shadow-xs pointer-events-none transition-all"
-            >
-              <div className="absolute -top-6 left-0 bg-red-600 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs whitespace-nowrap">
-                {item.label} ({confidencePct}%)
+          {/* Render real YOLO bounding boxes */}
+          {boundingBoxes.map((item) => {
+            const color = damageColor(item.damageCode)
+            return (
+              <div
+                key={item.id}
+                style={{
+                  position: 'absolute',
+                  left: `${item.box.x}%`,
+                  top: `${item.box.y}%`,
+                  width: `${item.box.w}%`,
+                  height: `${item.box.h}%`,
+                  borderColor: color,
+                  backgroundColor: `${color}25`,
+                  border: '2px solid',
+                  borderRadius: '4px',
+                  pointerEvents: 'none',
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '-22px',
+                    left: 0,
+                    backgroundColor: color,
+                    color: 'white',
+                    fontFamily: 'monospace',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    padding: '2px 6px',
+                    borderRadius: '3px',
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                  }}
+                >
+                  {item.label} · {Math.round(item.confidence * 1000) / 10}%
+                </div>
               </div>
+            )
+          })}
+
+          {/* No detection overlay */}
+          {isNoDetection && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+              <span className="text-white text-xs font-semibold bg-black/50 px-3 py-1.5 rounded-full">
+                No damage detected at threshold 70%
+              </span>
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -128,10 +243,18 @@ export default function DamageAnalysisCard({
             <span className="text-base font-extrabold text-slate-900">
               {damageType}
             </span>
-            <span className="text-xs text-blue-600 font-semibold">
-              Primary Class
-            </span>
+            {damageCode && (
+              <span
+                className="text-xs font-bold px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: `${damageColor(damageCode)}20`, color: damageColor(damageCode) }}
+              >
+                {damageCode}
+              </span>
+            )}
           </div>
+          <span className="text-[10px] text-slate-400 mt-0.5 block">
+            {detectionCount} detection{detectionCount !== 1 ? 's' : ''} found
+          </span>
         </div>
 
         <div>
@@ -139,27 +262,38 @@ export default function DamageAnalysisCard({
         </div>
       </div>
 
-      {/* Estimated Dimensions */}
-      <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/70">
-        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-2">
-          <Ruler size={14} className="text-blue-600" />
-          <span>Estimated Physical Geometry</span>
-        </div>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="bg-white p-2 rounded-lg border border-slate-200">
-            <span className="text-[10px] text-slate-400 block">Estimated Depth</span>
-            <span className="text-xs font-bold font-mono text-slate-800">{dimensions.depthCm} cm</span>
-          </div>
-          <div className="bg-white p-2 rounded-lg border border-slate-200">
-            <span className="text-[10px] text-slate-400 block">Span Width</span>
-            <span className="text-xs font-bold font-mono text-slate-800">{dimensions.widthCm} cm</span>
-          </div>
-          <div className="bg-white p-2 rounded-lg border border-slate-200">
-            <span className="text-[10px] text-slate-400 block">Surface Area</span>
-            <span className="text-xs font-bold font-mono text-slate-800">{dimensions.areaSqM} m²</span>
-          </div>
-        </div>
+      {/* Physical Dimensions — NOT shown (not measurable from 2D image) */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+        <Info size={14} className="text-amber-600 mt-0.5 shrink-0" />
+        <p className="text-[11px] text-amber-700 leading-snug">
+          <strong>Physical dimensions not measured.</strong>{' '}
+          Depth, width, and surface area cannot be reliably estimated from a
+          single uncalibrated photograph. Severity is classified from the YOLO
+          detection confidence score only.
+        </p>
       </div>
+
+      {/* All detections list */}
+      {boundingBoxes.length > 1 && (
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+            All Detections ({boundingBoxes.length})
+          </span>
+          {boundingBoxes.map((b, i) => (
+            <div
+              key={b.id}
+              className="flex items-center justify-between text-[11px] bg-slate-50 rounded-lg px-3 py-1.5 border border-slate-200"
+            >
+              <span className="font-medium text-slate-700">
+                #{i + 1} {b.label}
+              </span>
+              <span className="font-mono font-bold" style={{ color: damageColor(b.damageCode) }}>
+                {Math.round(b.confidence * 1000) / 10}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

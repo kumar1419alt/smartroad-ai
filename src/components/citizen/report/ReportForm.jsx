@@ -74,16 +74,18 @@ export default function ReportForm({ onReportSubmitted }) {
   const runPrediction = async (fileOrUrl) => {
     setIsAnalyzing(true)
     try {
-      const pred = await complaintService.predictDamage(fileOrUrl)
+      const gps = { latitude, longitude }
+      const pred = await complaintService.predictDamage(fileOrUrl, { gps })
       setAnalysisResult(pred)
 
-      // Calculate SRPS score based on predicted severity
+      // Calculate SRPS using only real available inputs:
+      //  - severity from YOLO result
+      //  - locationText from the current location field (heuristic)
+      //  - upvotes = 1 (first submission)
       const srps = complaintService.calculateSRPS({
         severity: pred.severity,
-        trafficImportance: 92,
-        locationCriticality: 88,
-        roadImportance: 85,
-        reportFrequency: 75,
+        locationText: locationName,
+        upvotes: 1,
       })
       setSrpsResult(srps)
     } catch (err) {
@@ -113,6 +115,16 @@ export default function ReportForm({ onReportSubmitted }) {
     if (loc.locationName) setLocationName(loc.locationName)
     if (loc.ward) setWard(loc.ward)
     setFormError('')
+
+    // Re-calculate SRPS when location changes (heuristic uses location text)
+    if (analysisResult) {
+      const srps = complaintService.calculateSRPS({
+        severity: analysisResult.severity,
+        locationText: loc.locationName || locationName,
+        upvotes: 1,
+      })
+      setSrpsResult(srps)
+    }
   }
 
   const handleSubmit = async (e) => {
@@ -132,16 +144,20 @@ export default function ReportForm({ onReportSubmitted }) {
     setIsSubmitting(true)
 
     try {
+      const confidencePct = analysisResult?.confidence
+        ? `${Math.round(analysisResult.confidence * 1000) / 10}%`
+        : null
+
       const payload = {
-        damageType: analysisResult?.damageType || 'Pothole',
-        severity: analysisResult?.severity || 'critical',
-        priorityScore: srpsResult?.totalScore || 92,
+        damageType: analysisResult?.damageType || 'Unknown',
+        severity: analysisResult?.severity || 'medium',
+        priorityScore: srpsResult?.totalScore || 50,
         location: locationName,
         ward: ward,
         coordinates: [latitude, longitude],
         description: description.trim(),
         imageUrl: imagePreview,
-        aiConfidence: `${Math.round((analysisResult?.confidence || 0.96) * 1000) / 10}%`,
+        aiConfidence: confidencePct,
         srpsBreakdown: srpsResult,
       }
 

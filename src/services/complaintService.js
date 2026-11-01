@@ -1,22 +1,29 @@
 /**
  * complaintService.js — Isolated service for Road Damage Reporting and AI Prediction.
  *
- * Designed to connect to FastAPI backend:
- *  - POST /api/v1/predict     (AI vision inference with bounding box detection)
- *  - POST /api/v1/complaints  (Register complaint with GIS location and SRPS score)
- *  - GET  /api/v1/complaints  (Fetch citizen complaints)
+ * Inference is delegated to the real FastAPI backend:
+ *  - POST /api/v1/detection/infer  (YOLOv8m-RDD2022 inference with bounding boxes)
+ *  - POST /api/v1/complaints        (Register complaint with GIS location and SRPS score)
+ *  - GET  /api/v1/complaints        (Fetch citizen complaints)
  *
- * Current implementation uses realistic client-side mock logic, saving
- * newly reported complaints to localStorage so they immediately reflect
- * in the Citizen Dashboard and My Reports.
+ * Physical dimensions (depth, width, area) CANNOT be reliably measured from a
+ * single uncalibrated 2-D image.  They are NOT returned by the backend and are
+ * NOT fabricated here.  The UI displays "Not measured" for those fields.
+ *
+ * SRPS uses only values that are actually available at report time:
+ *  - Damage severity  ← from YOLO inference response
+ *  - Traffic / Location / Road importance ← derived from location text heuristic
+ *    (clearly documented as heuristic, not real sensor data)
+ *  - Citizen reports  ← defaults to 1 (this is the first report)
  */
 
+import apiClient from './apiClient'
 import { mockPuneComplaints } from '../data/mockData'
 
 const LOCAL_COMPLAINTS_KEY = 'rds_citizen_complaints'
 
-/** Helper to simulate network latency */
-const delay = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms))
+/** Helper to simulate lightweight network latency on local fallbacks */
+const delay = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Retrieve all complaints (built-in demo + citizen submissions) */
 export function getSavedComplaints() {
@@ -42,166 +49,395 @@ export function saveComplaintLocally(complaint) {
   }
 }
 
+/**
+ * Convert any image source to a base64 data URL string suitable for the API.
+ * Handles:
+ *   - File objects (from drag-drop / browse)
+ *   - Blob URLs (object:// — created by URL.createObjectURL)
+ *   - Absolute static paths (e.g. /sample-pothole.jpg)
+ *
+ * @param {File|string} source
+ * @returns {Promise<string>} data URL, e.g. "data:image/jpeg;base64,..."
+ */
+export async function imageToBase64(source) {
+  // Already a data URL
+  if (typeof source === 'string' && source.startsWith('data:')) {
+    return source
+  }
+
+  // File object
+  if (source instanceof File) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(source)
+    })
+  }
+
+  // Blob URL or static path — fetch and convert
+  if (typeof source === 'string') {
+    const resp = await fetch(source)
+    if (!resp.ok) throw new Error(`Failed to fetch image: ${resp.status}`)
+    const blob = await resp.blob()
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  throw new Error('Unsupported image source type')
+}
+
+/**
+ * Map a YOLO damage_code to a human-readable damage type label.
+ */
+function damageCodeToLabel(code) {
+  const map = {
+    D00: 'Longitudinal Crack',
+    D10: 'Transverse Crack',
+    D20: 'Alligator Crack',
+    D40: 'Pothole',
+  }
+  return map[code] || code || 'Road Damage'
+}
+
 export const complaintService = {
   /**
-   * Simulate AI Vision Inference (POST /api/v1/predict)
+   * Run AI Vision Inference via the real YOLOv8m backend.
    *
-   * Analyzes uploaded road image, detecting damage type,
-   * confidence score, severity rating, and bounding box coordinates.
+   * POST /api/v1/detection/infer
    *
-   * @param {File | string} imageFileOrUrl
+   * Accepts a File object, a blob URL, or a static path.
+   * Returns a normalized result object for the UI.
+   *
+   * @param {File|string} imageFileOrUrl
+   * @param {object} [options]
+   * @param {number} [options.confidenceThreshold=0.70]
+   * @param {{ latitude: number, longitude: number }|null} [options.gps=null]
    * @returns {Promise<{
    *   damageType: string,
+   *   damageCode: string|null,
    *   confidence: number,
-   *   severity: 'critical' | 'high' | 'medium' | 'low',
-   *   boundingBoxes: Array<{ label: string, confidence: number, box: { x: number, y: number, w: number, h: number } }>,
-   *   dimensions: { depthCm: number, widthCm: number, areaSqM: number },
-   *   recommendedAction: string
+   *   severity: 'critical'|'high'|'medium'|'low',
+   *   model: string,
+   *   inferenceTimeMs: number,
+   *   status: string,
+   *   boundingBoxes: Array<{ id: string, label: string, confidence: number, box: { x,y,w,h } }>,
+   *   detectionCount: number,
+   *   isBackendResult: boolean,
+   *   backendUnavailable: boolean,
    * }>}
    */
-  async predictDamage(imageFileOrUrl) {
-    await delay(700)
+  async predictDamage(imageFileOrUrl, options = {}) {
+    const { confidenceThreshold = 0.70, gps = null } = options
 
-    // Realistic AI detection output
+    // Convert image to base64 (required by API)
+    let imageB64
+    try {
+      imageB64 = await imageToBase64(imageFileOrUrl)
+    } catch (convErr) {
+      console.error('[complaintService] Image conversion failed:', convErr)
+      return this._backendUnavailableResult()
+    }
+
+    // Build request payload matching the DetectionRequest schema
+    const payload = {
+      session_id: `report-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      image: imageB64,
+      gps: gps ? { latitude: gps.latitude, longitude: gps.longitude } : null,
+      confidence_threshold: confidenceThreshold,
+    }
+
+    try {
+      const response = await apiClient.post('/detection/infer', payload, { timeout: 30000 })
+      const data = response.data
+
+      if (!data || data.status === 'model_not_configured') {
+        // Backend is up but model weights are not loaded
+        return this._modelNotConfiguredResult(data)
+      }
+
+      if (data.status === 'invalid_image') {
+        return this._invalidImageResult(data)
+      }
+
+      // Parse the real detections
+      const detections = Array.isArray(data.detections) ? data.detections : []
+
+      // Pick the primary (highest-confidence) detection
+      const primary = detections.length > 0 ? detections[0] : null
+
+      // Build bounding boxes in the format expected by DamageAnalysisCard
+      const boundingBoxes = detections.map((det, i) => ({
+        id: `yolo-box-${i}`,
+        label: `${det.class_name} (${det.damage_code})`,
+        confidence: det.confidence,
+        damageCode: det.damage_code,
+        box: det.box, // already { x, y, w, h } in percentages
+      }))
+
+      return {
+        damageType: primary ? damageCodeToLabel(primary.damage_code) : 'No Damage Detected',
+        damageCode: primary ? primary.damage_code : null,
+        confidence: primary ? primary.confidence : 0,
+        severity: primary ? primary.severity : 'low',
+        model: data.model || 'YOLOv8m-RDD2022',
+        inferenceTimeMs: data.inference_time_ms || 0,
+        status: data.status || 'success',
+        boundingBoxes,
+        detectionCount: detections.length,
+        isBackendResult: true,
+        backendUnavailable: false,
+        // Physical dimensions cannot be measured from a single uncalibrated image
+        dimensions: null,
+      }
+    } catch (err) {
+      console.error('[complaintService] Backend inference failed:', err)
+      return this._backendUnavailableResult()
+    }
+  },
+
+  /** Result when the backend is unreachable */
+  _backendUnavailableResult() {
     return {
-      damageType: 'Pothole',
-      confidence: 0.964,
-      severity: 'critical',
-      boundingBoxes: [
-        {
-          id: 'box-1',
-          label: 'Pothole (Severe)',
-          confidence: 0.964,
-          box: {
-            x: 20, // percentage from left
-            y: 35, // percentage from top
-            w: 55, // width percentage
-            h: 46, // height percentage
-          },
-        },
-      ],
-      dimensions: {
-        depthCm: 14.5,
-        widthCm: 52.0,
-        areaSqM: 0.58,
-      },
-      recommendedAction: 'Rapid cold-planing & hot-mix asphalt patching required within 48h.',
+      damageType: 'Unknown (Backend Offline)',
+      damageCode: null,
+      confidence: 0,
+      severity: 'medium',
+      model: 'Backend Unavailable',
+      inferenceTimeMs: 0,
+      status: 'backend_unavailable',
+      boundingBoxes: [],
+      detectionCount: 0,
+      isBackendResult: false,
+      backendUnavailable: true,
+      dimensions: null,
+    }
+  },
+
+  /** Result when model weights are not configured */
+  _modelNotConfiguredResult(data) {
+    return {
+      damageType: 'Model Not Configured',
+      damageCode: null,
+      confidence: 0,
+      severity: 'medium',
+      model: data?.model || 'YOLOv8-RDD2022 (Unconfigured)',
+      inferenceTimeMs: data?.inference_time_ms || 0,
+      status: 'model_not_configured',
+      boundingBoxes: [],
+      detectionCount: 0,
+      isBackendResult: true,
+      backendUnavailable: false,
+      dimensions: null,
+    }
+  },
+
+  /** Result when image is invalid or unreadable */
+  _invalidImageResult(data) {
+    return {
+      damageType: 'Invalid Image',
+      damageCode: null,
+      confidence: 0,
+      severity: 'low',
+      model: data?.model || 'YOLOv8m-RDD2022',
+      inferenceTimeMs: data?.inference_time_ms || 0,
+      status: 'invalid_image',
+      boundingBoxes: [],
+      detectionCount: 0,
+      isBackendResult: true,
+      backendUnavailable: false,
+      dimensions: null,
     }
   },
 
   /**
-   * Calculate Smart Road Priority Score (SRPS: 0 - 100)
+   * Calculate Smart Road Priority Score (SRPS: 0 – 100).
    *
-   * Evaluates the 5 multi-factor criteria:
-   *  1. Damage Severity (Weight: 35%)
-   *  2. Traffic Importance (Weight: 25%)
-   *  3. Location Criticality (Weight: 15%)
-   *  4. Road Importance (Weight: 15%)
-   *  5. Citizen Report Frequency (Weight: 10%)
+   * Uses only values that are actually available at report time.
+   * Heuristic-derived values are clearly documented as such.
    *
-   * @param {object} factors
-   * @returns {{
-   *   totalScore: number,
-   *   priorityLevel: 'Critical' | 'High' | 'Medium' | 'Low',
-   *   components: Array<{ name: string, weight: number, score: number, weightedScore: number, description: string }>
-   * }}
+   * Weights:
+   *   Damage Severity (S)      35% — from YOLO inference
+   *   Traffic Importance (T)   25% — location-text heuristic (documented)
+   *   Location Criticality (L) 20% — location-text heuristic (documented)
+   *   Road Importance (R)      15% — location-text heuristic (documented)
+   *   Citizen Reports (C)       5% — 1 report = this submission; scaled to [30,98]
+   *
+   * @param {{ severity, locationText, upvotes }} factors
+   * @returns {{ totalScore, priorityLevel, components }}
    */
-  calculateSRPS(factors = {}) {
-    const {
-      severity = 'critical',
-      trafficImportance = 88,    // Peak traffic volume on road (0 - 100)
-      locationCriticality = 90,  // Proximity to hospitals, schools, transit hubs (0 - 100)
-      roadImportance = 85,       // Arterial / Highway vs Local ward street (0 - 100)
-      reportFrequency = 80,      // Number of citizen duplicate reports (0 - 100)
-    } = factors
+  calculateSRPS({ severity = 'medium', locationText = '', upvotes = 1 } = {}) {
+    const loc = (locationText || '').toLowerCase()
+    const sev = (severity || 'medium').toLowerCase()
 
-    // Severity base score
-    let severityScore = 95
-    if (severity === 'high') severityScore = 80
-    if (severity === 'medium') severityScore = 60
-    if (severity === 'low') severityScore = 40
+    // ── S: Damage Severity (from real YOLO inference) ──────────────────
+    const sevScores = { critical: 96, high: 82, medium: 60, low: 42 }
+    const S = sevScores[sev] ?? 60
 
-    // Component calculations
-    const components = [
-      {
-        name: 'Damage Severity',
-        weight: 35,
-        score: severityScore,
-        weightedScore: Math.round(severityScore * 0.35),
-        description: 'Physical depth (>10cm), crack expansion & vehicle tire damage potential',
-      },
-      {
-        name: 'Traffic Importance',
-        weight: 25,
-        score: trafficImportance,
-        weightedScore: Math.round(trafficImportance * 0.25),
-        description: 'High daily passenger density, public transport & PMT bus route transit',
-      },
-      {
-        name: 'Location Criticality',
-        weight: 15,
-        score: locationCriticality,
-        weightedScore: Math.round(locationCriticality * 0.15),
-        description: 'Near emergency services, school crossings & commercial intersections',
-      },
-      {
-        name: 'Road Importance',
-        weight: 15,
-        score: roadImportance,
-        weightedScore: Math.round(roadImportance * 0.15),
-        description: 'Primary city arterial corridor (FC Road, SB Road, IT Corridors)',
-      },
-      {
-        name: 'Citizen Report Frequency',
-        weight: 10,
-        score: reportFrequency,
-        weightedScore: Math.round(reportFrequency * 0.1),
-        description: 'Community alerts and crowd-sourced hazard confirmations',
-      },
-    ]
+    // ── T: Traffic Importance (location-text heuristic) ────────────────
+    // Source: Named road pattern matching. Documented as heuristic estimate,
+    // NOT real sensor data. Neutral default = 52 (unknown road).
+    let T = 52
+    if (/fc road|hinjewadi|highway|wakad|nh-/i.test(loc)) T = 94
+    else if (/senapati bapat|karve|swargate/i.test(loc)) T = 88
+    else if (/baner|nagar road|katraj/i.test(loc)) T = 82
+    else if (/paud road|viman nagar|kondhwa/i.test(loc)) T = 74
 
-    const totalScore = components.reduce((acc, c) => acc + c.weightedScore, 0)
+    // ── L: Location Criticality (location-text heuristic) ─────────────
+    let L = 50
+    if (/hospital|goodluck|icc|nal stop/i.test(loc)) L = 92
+    else if (/shivaji chowk|flyover|underpass/i.test(loc)) L = 86
+    else if (/school|station|market/i.test(loc)) L = 78
+    else if (/balewadi|kharadi|magarpatta/i.test(loc)) L = 72
+
+    // ── R: Road Importance (location-text heuristic) ───────────────────
+    let R = 48
+    if (/highway|fc road|nh-|expressway/i.test(loc)) R = 95
+    else if (/senapati bapat|baner road|nagar road|karve road/i.test(loc)) R = 86
+    else if (/hinjewadi phase|paud road|swargate/i.test(loc)) R = 80
+    else if (/central avenue|station road|aundh/i.test(loc)) R = 68
+
+    // ── C: Citizen Reports ─────────────────────────────────────────────
+    // 1 upvote = first submission. Capped at 98.
+    const C = Math.min(98, Math.max(30, Math.round(upvotes * 1.6 + 25)))
+
+    const weights = { S: 0.35, T: 0.25, L: 0.20, R: 0.15, C: 0.05 }
+    const totalScore = Math.min(
+      100,
+      Math.round(S * weights.S + T * weights.T + L * weights.L + R * weights.R + C * weights.C),
+    )
 
     let priorityLevel = 'Low'
     if (totalScore >= 85) priorityLevel = 'Critical'
     else if (totalScore >= 70) priorityLevel = 'High'
     else if (totalScore >= 50) priorityLevel = 'Medium'
 
-    return {
-      totalScore: Math.min(100, Math.max(0, totalScore)),
-      priorityLevel,
-      components,
-    }
+    const components = [
+      {
+        name: 'Damage Severity',
+        weight: 35,
+        score: S,
+        weightedScore: Math.round(S * weights.S),
+        description: 'From YOLOv8m inference result (class confidence + severity label)',
+        source: 'YOLO Backend Inference',
+      },
+      {
+        name: 'Traffic Importance',
+        weight: 25,
+        score: T,
+        weightedScore: Math.round(T * weights.T),
+        description: 'Location-text heuristic estimate. Real sensor data unavailable.',
+        source: 'Location Name Pattern (Heuristic)',
+      },
+      {
+        name: 'Location Criticality',
+        weight: 20,
+        score: L,
+        weightedScore: Math.round(L * weights.L),
+        description: 'Proximity to hospitals, schools, transit hubs (heuristic).',
+        source: 'Location Name Pattern (Heuristic)',
+      },
+      {
+        name: 'Road Importance',
+        weight: 15,
+        score: R,
+        weightedScore: Math.round(R * weights.R),
+        description: 'Road hierarchy classification (heuristic from address text).',
+        source: 'Location Name Pattern (Heuristic)',
+      },
+      {
+        name: 'Citizen Reports',
+        weight: 5,
+        score: C,
+        weightedScore: Math.round(C * weights.C),
+        description: `Based on ${upvotes} citizen report(s) for this location.`,
+        source: 'Citizen Submission Count',
+      },
+    ]
+
+    return { totalScore, priorityLevel, components }
   },
 
   /**
-   * Submit new citizen road damage complaint (POST /api/v1/complaints)
+   * Submit new citizen road damage complaint.
+   * Tries real backend first; falls back to localStorage if unavailable.
    *
    * @param {object} payload
    * @returns {Promise<{ success: boolean, complaint: object }>}
    */
   async submitComplaint(payload) {
-    await delay(800)
+    // Try the real backend
+    try {
+      const [lat, lng] = payload.coordinates || [18.5186, 73.8415]
+      const backendPayload = {
+        damageType: payload.damageType || 'Pothole',
+        severity: payload.severity || 'medium',
+        priorityScore: payload.priorityScore || 50,
+        location: payload.location || 'Unknown Location',
+        ward: payload.ward || null,
+        coordinates: payload.coordinates || [lat, lng],
+        latitude: lat,
+        longitude: lng,
+        description: payload.description || '',
+        aiConfidence: payload.aiConfidence || null,
+        reportingSource: 'citizen_app',
+      }
 
-    const randomIdNumber = Math.floor(450 + Math.random() * 50)
-    const complaintId = `PMC-2026-0${randomIdNumber}`
+      const res = await apiClient.post('/complaints', backendPayload, { timeout: 8000 })
+      const complaint = res.data
+
+      // Also save locally so it appears immediately in My Reports (localStorage)
+      saveComplaintLocally({
+        id: complaint.id,
+        incidentId: complaint.incidentId,
+        damageType: complaint.damageType,
+        location: complaint.location,
+        ward: complaint.ward,
+        coordinates: complaint.coordinates,
+        severity: complaint.severity,
+        priority: complaint.priorityScore,
+        status: complaint.status || 'Pending',
+        date: 'Today, ' + new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+        timestamp: complaint.createdAt || new Date().toISOString(),
+        aiConfidence: payload.aiConfidence || null,
+        description: payload.description || '',
+        imageUrl: payload.imageUrl || null,
+        estimatedFix: 'Under PMC Inspection',
+        upvotes: 1,
+        srpsBreakdown: payload.srpsBreakdown || null,
+      })
+
+      return { success: true, complaint }
+    } catch (backendErr) {
+      console.warn('[complaintService] Backend complaint submission failed, using local fallback:', backendErr.message)
+    }
+
+    // Local fallback — assign a local ID and save
+    await delay(400)
+    const randomId = Math.floor(450 + Math.random() * 50)
     const incidentId = `INC-2026-00${Math.floor(930 + Math.random() * 60)}`
+    const complaintId = `PMC-2026-0${randomId}`
 
     const newComplaint = {
       id: complaintId,
-      incidentId: incidentId,
+      incidentId,
       damageType: payload.damageType || 'Pothole',
       location: payload.location || 'FC Road, Deccan Gymkhana, Pune',
       ward: payload.ward || 'Ward 14 (Shivajinagar - Deccan)',
       coordinates: payload.coordinates || [18.5186, 73.8415],
-      severity: payload.severity || 'critical',
-      priority: payload.priorityScore || 92,
+      severity: payload.severity || 'medium',
+      priority: payload.priorityScore || 50,
       status: 'Pending',
       date: 'Today, ' + new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
       timestamp: new Date().toISOString(),
-      aiConfidence: payload.aiConfidence || '96.4%',
+      aiConfidence: payload.aiConfidence || null,
       description: payload.description || 'Citizen reported road hazard.',
-      imageUrl: payload.imageUrl || '/sample-pothole.jpg',
+      imageUrl: payload.imageUrl || null,
       estimatedFix: 'Under PMC Inspection',
       upvotes: 1,
       assignedSquad: 'PMC Rapid Response Team #4',
@@ -209,16 +445,11 @@ export const complaintService = {
     }
 
     saveComplaintLocally(newComplaint)
-
-    return {
-      success: true,
-      complaint: newComplaint,
-    }
+    return { success: true, complaint: newComplaint }
   },
 
   /**
-   * Get single complaint by ID or tracking code (GET /api/v1/complaints/:id)
-   *
+   * Get single complaint by ID or tracking code.
    * @param {string} id
    * @returns {object | null}
    */
@@ -231,7 +462,6 @@ export const complaintService = {
     )
 
     if (found) {
-      // Enrich with officer and lifecycle metadata if not already present
       return {
         ...found,
         imageUrl: found.imageUrl || '/sample-pothole.jpg',
@@ -250,13 +480,7 @@ export const complaintService = {
           materials: '1.8 tonnes Hot Mix Asphalt (VG-30 grade)',
           scheduledDate: found.estimatedFix || '15 Oct 2026',
         },
-        boundingBoxes: found.boundingBoxes || [
-          {
-            id: 'box-1',
-            label: `${found.damageType || 'Pothole'} (${found.aiConfidence || '96.4%'})`,
-            box: { x: 22, y: 35, w: 52, h: 48 },
-          },
-        ],
+        boundingBoxes: found.boundingBoxes || [],
       }
     }
 

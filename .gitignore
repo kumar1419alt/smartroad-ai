@@ -43,6 +43,12 @@ backend/.env
 !.env.example
 !backend/.env.example
 
+# Model weights (large binary files — do not commit)
+backend/weights/*.pt
+backend/weights/*.onnx
+backend/weights/*.pth
+backend/weights/*.bin
+
 # Editor & OS files
 .vscode/*
 !.vscode/extensions.json
