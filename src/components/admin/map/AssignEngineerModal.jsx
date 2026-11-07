@@ -33,12 +33,12 @@ export default function AssignEngineerModal({
     }
   }, [isOpen, onClose])
 
-  if (!isOpen || !complaint) return null
-
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [targetDate, setTargetDate] = useState('2026-10-16')
   const [urgencyNote, setUrgencyNote] = useState('Inspect surface deformation and coordinate traffic cones with local ward police.')
   const [submitting, setSubmitting] = useState(false)
+
+  if (!isOpen || !complaint) return null
 
   const handleSubmit = (e) => {
     e.preventDefault()

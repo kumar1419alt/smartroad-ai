@@ -1,0 +1,4 @@
+# This directory holds YOLO model weights (*.pt files).
+# Weights are excluded from git via .gitignore (large binary files).
+# To deploy: copy best.pt here and set YOLO_MODEL_PATH=backend/weights/best.pt in .env
+

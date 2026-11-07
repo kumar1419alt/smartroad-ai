@@ -52,6 +52,7 @@ const SEVERITY_STYLES = {
 }
 
 const STATUS_STYLES = {
+  'Pending': 'bg-purple-100 text-purple-700',
   'Assigned': 'bg-blue-100 text-blue-700',
   'In Progress': 'bg-amber-100 text-amber-700',
   'Resolved': 'bg-emerald-100 text-emerald-700',
@@ -82,9 +83,34 @@ export default function EngineerIssueDetailModal({ issue, isOpen, onClose, onUpd
 
   const sev = SEVERITY_STYLES[issue.severity] || SEVERITY_STYLES.medium
 
+  const handleAcceptComplaint = () => {
+    onUpdate(issue.id, {
+      status: 'In Progress',
+      assignedEngineer: 'Er. Rajesh Kulkarni',
+      assignedSquad: 'Ward 14 Rapid Squad',
+      repairProgress: 15,
+      notes: completionNotes || 'Accepted by Er. Rajesh Kulkarni for on-site repair.',
+      startDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    })
+    toast.success(`Complaint ${issue.complaintId} accepted! Status: In Progress`)
+  }
+
+  const handleUpdateProgress = (newPct) => {
+    const isDone = newPct >= 100
+    onUpdate(issue.id, {
+      repairProgress: newPct,
+      status: isDone ? 'Resolved' : 'In Progress',
+      completionDate: isDone ? new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : undefined,
+      notes: completionNotes || issue.notes,
+      afterImage: isDone ? (afterImagePreview || issue.afterImage || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80') : afterImagePreview,
+    })
+    toast.info(`Repair progress updated to ${newPct}% on ${issue.complaintId}`)
+  }
+
   const handleStartRepair = () => {
     onUpdate(issue.id, {
       status: 'In Progress',
+      repairProgress: Math.max(issue.repairProgress || 0, 25),
       startDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
     })
     toast.success(`Repair started on ${issue.complaintId}. Status: In Progress`)
@@ -93,9 +119,10 @@ export default function EngineerIssueDetailModal({ issue, isOpen, onClose, onUpd
   const handleMarkResolved = () => {
     onUpdate(issue.id, {
       status: 'Resolved',
+      repairProgress: 100,
       completionDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-      afterImage: afterImagePreview || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80',
-      notes: completionNotes || issue.notes,
+      afterImage: afterImagePreview || issue.afterImage || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80',
+      notes: completionNotes || issue.notes || 'Repair completed and verified on site.',
     })
     toast.success(`Issue ${issue.complaintId} marked as Resolved! QA verified.`)
   }
@@ -199,6 +226,51 @@ export default function EngineerIssueDetailModal({ issue, isOpen, onClose, onUpd
                   </span>
                 </div>
               </div>
+
+              {/* Live Repair Progress Bar (when In Progress or Resolved) */}
+              {(issue.status === 'In Progress' || issue.status === 'Resolved' || issue.repairProgress > 0) && (
+                <div className="p-4 rounded-xl bg-blue-50/80 border border-blue-200">
+                  <div className="flex items-center justify-between mb-2 text-xs">
+                    <span className="font-bold text-blue-900 flex items-center gap-1.5">
+                      <Wrench size={14} className="text-blue-600" />
+                      Repair Execution Progress
+                    </span>
+                    <span className="font-mono font-extrabold text-blue-700 bg-white px-2.5 py-0.5 rounded-lg border border-blue-200 shadow-xs">
+                      {issue.repairProgress || (issue.status === 'Resolved' ? 100 : 15)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-blue-200/70 rounded-full h-3 overflow-hidden shadow-inner">
+                    <div
+                      className={`h-3 rounded-full transition-all duration-700 ${
+                        (issue.repairProgress || 0) >= 100 || issue.status === 'Resolved' ? 'bg-emerald-500' : 'bg-blue-600'
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(0, issue.repairProgress || (issue.status === 'Resolved' ? 100 : 15)))}%` }}
+                    />
+                  </div>
+                  {issue.notes && (
+                    <p className="text-[11px] text-blue-800 mt-2 font-medium">
+                      <strong>Latest Engineer Note:</strong> {issue.notes}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Pending Action Banner */}
+              {issue.status === 'Pending' && (
+                <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-bold text-purple-900">Unassigned / Pending Citizen Complaint</span>
+                    <p className="text-[11px] text-purple-700 mt-0.5">Click below to take charge and mobilize repair squad.</p>
+                  </div>
+                  <button
+                    onClick={handleAcceptComplaint}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors shrink-0"
+                  >
+                    <CheckCircle2 size={14} />
+                    Accept Complaint
+                  </button>
+                </div>
+              )}
 
               {/* Info Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -461,6 +533,27 @@ export default function EngineerIssueDetailModal({ issue, isOpen, onClose, onUpd
           {/* ACTIONS TAB */}
           {activeTab === 'actions' && (
             <div className="space-y-5">
+              {/* Accept Complaint (if Pending) */}
+              {issue.status === 'Pending' && (
+                <div className="p-5 bg-purple-50 rounded-xl border border-purple-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Shield size={16} className="text-purple-600" />
+                    <h3 className="text-sm font-bold text-purple-900">Accept Municipal Road Complaint</h3>
+                  </div>
+                  <p className="text-xs text-purple-800 mb-4">
+                    Take operational charge of <strong>{issue.complaintId}</strong> at <strong>{issue.location}</strong>.
+                    Accepting this complaint will assign it to your engineering squad, move status to "In Progress", and notify the citizen.
+                  </p>
+                  <button
+                    onClick={handleAcceptComplaint}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-md transition-all hover:shadow-lg cursor-pointer"
+                  >
+                    <CheckCircle2 size={15} />
+                    Accept Complaint & Start Dispatch
+                  </button>
+                </div>
+              )}
+
               {/* Start Repair */}
               {issue.status === 'Assigned' && (
                 <div className="p-5 bg-blue-50 rounded-xl border border-blue-200">
@@ -474,11 +567,59 @@ export default function EngineerIssueDetailModal({ issue, isOpen, onClose, onUpd
                   </p>
                   <button
                     onClick={handleStartRepair}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition-all hover:shadow-lg"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition-all hover:shadow-lg cursor-pointer"
                   >
                     <PlayCircle size={15} />
                     Start Repair Now
                   </button>
+                </div>
+              )}
+
+              {/* Repair Progress Milestones (if In Progress) */}
+              {issue.status === 'In Progress' && (
+                <div className="p-5 bg-blue-50/80 rounded-xl border border-blue-200 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Wrench size={16} className="text-blue-600" />
+                      <h3 className="text-sm font-bold text-blue-900">Repair Execution Milestones</h3>
+                    </div>
+                    <span className="font-mono text-xs font-black text-blue-700 bg-white px-2.5 py-1 rounded-lg border border-blue-200 shadow-xs">
+                      {issue.repairProgress || 15}% Done
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { pct: 25, label: 'Site Prep', desc: 'Barricades & milling' },
+                      { pct: 50, label: 'Asphalt Fill', desc: 'VG-30 bitumen mix' },
+                      { pct: 75, label: 'Compaction', desc: 'Vibratory roller' },
+                      { pct: 100, label: 'Complete', desc: 'QA inspection' },
+                    ].map((step) => {
+                      const isActive = (issue.repairProgress || 0) >= step.pct
+                      return (
+                        <button
+                          key={step.pct}
+                          onClick={() => handleUpdateProgress(step.pct)}
+                          className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                              : 'bg-white hover:bg-blue-100/60 border-blue-200 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-black">{step.pct}%</span>
+                            {isActive && <CheckCircle2 size={12} className="text-white" />}
+                          </div>
+                          <p className={`text-xs font-bold leading-tight ${isActive ? 'text-white' : 'text-slate-800'}`}>
+                            {step.label}
+                          </p>
+                          <p className={`text-[10px] mt-0.5 ${isActive ? 'text-blue-100' : 'text-slate-400'}`}>
+                            {step.desc}
+                          </p>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               )}
 

@@ -42,6 +42,7 @@ import {
   Info,
 } from 'lucide-react'
 import { MOCK_ENGINEER_ISSUES } from '../../data/mockEngineerData'
+import complaintService from '../../services/complaintService'
 import { useToast } from '../../contexts/ToastContext'
 
 const STORAGE_KEY = 'rds_engineer_issues'
@@ -54,6 +55,11 @@ const SEVERITY_STYLES = {
 }
 
 const STATUS_CONFIG = {
+  'Pending': {
+    badge: 'bg-purple-100 text-purple-700 border-purple-200',
+    step: 0,
+    desc: 'Citizen reported defect. Ready for field engineer acceptance.',
+  },
   'Assigned': {
     badge: 'bg-blue-100 text-blue-700 border-blue-200',
     step: 1,
@@ -86,24 +92,35 @@ export default function EngineerIssuePage() {
   const [actionFeedback, setActionFeedback] = useState(null)
   const fileInputRef = useRef(null)
 
-  // Load issues and find target
+  // Load issues from backend API / service and find target
   useEffect(() => {
-    let list = []
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      list = stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES
-    } catch {
-      list = MOCK_ENGINEER_ISSUES
-    }
-    setIssues(list)
-
-    const found = list.find((i) => i.id === id || i.complaintId === id)
-    if (found) {
-      setIssue(found)
-      if (found.afterImage) {
-        setAfterImagePreview(found.afterImage)
+    let active = true
+    const loadData = async () => {
+      try {
+        const raw = await complaintService.fetchComplaints()
+        const normalized = (raw || []).map(complaintService.complaintToIssue)
+        if (!active) return
+        setIssues(normalized)
+        const found = normalized.find((i) => i.id === id || i.complaintId === id)
+        if (found) {
+          setIssue(found)
+          if (found.afterImage) {
+            setAfterImagePreview(found.afterImage)
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load issue:', err)
+        if (active) {
+          const stored = localStorage.getItem(STORAGE_KEY)
+          const fallback = stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES
+          setIssues(fallback)
+          const found = fallback.find((i) => i.id === id || i.complaintId === id)
+          if (found) setIssue(found)
+        }
       }
     }
+    loadData()
+    return () => { active = false }
   }, [id])
 
   if (!issue) {
@@ -128,7 +145,31 @@ export default function EngineerIssuePage() {
     )
   }
 
-  const saveUpdatedIssue = (patch) => {
+  const saveUpdatedIssue = async (patch) => {
+    try {
+      if (patch.repairProgress !== undefined) {
+        await complaintService.updateRepairProgress(issue.id, {
+          repairProgress: patch.repairProgress,
+          status: patch.status,
+          note: patch.notes,
+          afterImageUrl: patch.afterImage,
+        })
+      } else if (patch.status === 'In Progress' && (!patch.repairProgress || patch.repairProgress === 15)) {
+        await complaintService.acceptComplaint(issue.id, {
+          engineerName: 'Er. Rajesh Kulkarni',
+          squad: 'Ward 14 Rapid Squad',
+          note: patch.notes || 'Accepted for field repair by engineer.',
+        })
+      } else if (patch.status) {
+        await complaintService.updateComplaintStatus(issue.id, {
+          status: patch.status,
+          note: patch.notes,
+        })
+      }
+    } catch (err) {
+      console.warn('API update failed, updating local state:', err)
+    }
+
     const updated = issues.map((i) => (i.id === issue.id ? { ...i, ...patch } : i))
     setIssues(updated)
     setIssue((prev) => ({ ...prev, ...patch }))
@@ -139,10 +180,37 @@ export default function EngineerIssuePage() {
     }
   }
 
-  const handleStartRepair = () => {
-    const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-    saveUpdatedIssue({
+  const handleAcceptComplaint = async () => {
+    const patch = {
       status: 'In Progress',
+      assignedEngineer: 'Er. Rajesh Kulkarni',
+      assignedSquad: 'Ward 14 Rapid Squad',
+      repairProgress: 15,
+      notes: completionNotes || 'Accepted by Er. Rajesh Kulkarni for on-site repair.',
+      startDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    }
+    await saveUpdatedIssue(patch)
+    toast.success(`Complaint ${issue.complaintId} accepted! Status: In Progress`)
+  }
+
+  const handleUpdateProgress = async (newPct) => {
+    const isDone = newPct >= 100
+    const patch = {
+      repairProgress: newPct,
+      status: isDone ? 'Resolved' : 'In Progress',
+      completionDate: isDone ? new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : undefined,
+      afterImage: isDone ? (afterImagePreview || issue.afterImage || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80') : afterImagePreview,
+      notes: completionNotes || issue.notes,
+    }
+    await saveUpdatedIssue(patch)
+    toast.info(`Repair progress updated to ${newPct}%`)
+  }
+
+  const handleStartRepair = async () => {
+    const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    await saveUpdatedIssue({
+      status: 'In Progress',
+      repairProgress: Math.max(issue.repairProgress || 0, 25),
       startDate: dateStr,
     })
     setActionFeedback('Repair marked as In Progress. Crew timer started.')
@@ -166,17 +234,18 @@ export default function EngineerIssuePage() {
     reader.readAsDataURL(file)
   }
 
-  const handleMarkResolved = () => {
+  const handleMarkResolved = async () => {
     const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
     const resolvedImage =
       afterImagePreview ||
       'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80'
 
-    saveUpdatedIssue({
+    await saveUpdatedIssue({
       status: 'Resolved',
+      repairProgress: 100,
       completionDate: dateStr,
       afterImage: resolvedImage,
-      notes: completionNotes ? `${issue.notes || ''} | Engineer Sign-off: ${completionNotes}` : issue.notes,
+      notes: completionNotes ? `${issue.notes || ''} | Engineer Sign-off: ${completionNotes}` : (issue.notes || 'Repair verified and signed off.'),
     })
     setActionFeedback('Issue successfully marked as Resolved with QA approval!')
     toast.success('Issue successfully marked as Resolved with QA approval!')
@@ -226,10 +295,19 @@ export default function EngineerIssuePage() {
             <MapPin size={14} className="text-emerald-600" />
             Field Map
           </Link>
+          {issue.status === 'Pending' && (
+            <button
+              onClick={handleAcceptComplaint}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-purple-600 text-white hover:bg-purple-700 transition-colors shadow-sm cursor-pointer"
+            >
+              <CheckCircle2 size={15} />
+              Accept Complaint
+            </button>
+          )}
           {issue.status === 'Assigned' && (
             <button
               onClick={handleStartRepair}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition-colors shadow-sm cursor-pointer"
             >
               <PlayCircle size={15} />
               Start Repair
@@ -238,7 +316,7 @@ export default function EngineerIssuePage() {
           {issue.status === 'In Progress' && (
             <button
               onClick={handleMarkResolved}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-sm"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-sm cursor-pointer"
             >
               <CheckCircle2 size={15} />
               Mark Resolved
@@ -573,15 +651,64 @@ export default function EngineerIssuePage() {
               onChange={handleImageFileChange}
             />
 
+            {/* Action: Accept Complaint (if Pending) */}
+            {issue.status === 'Pending' && (
+              <button
+                onClick={handleAcceptComplaint}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs transition-colors shadow-sm cursor-pointer"
+              >
+                <CheckCircle2 size={16} />
+                Accept Complaint & Mobilize Squad
+              </button>
+            )}
+
             {/* Action 1: Start repair if still assigned */}
             {issue.status === 'Assigned' && (
               <button
                 onClick={handleStartRepair}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition-colors shadow-sm"
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition-colors shadow-sm cursor-pointer"
               >
                 <PlayCircle size={16} />
                 Start Repair Work on Site
               </button>
+            )}
+
+            {/* Repair Progress Milestones (if In Progress) */}
+            {issue.status === 'In Progress' && (
+              <div className="p-3 bg-white/5 rounded-xl border border-white/10 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-amber-300 flex items-center gap-1">
+                    <Wrench size={13} />
+                    Progress Milestones
+                  </span>
+                  <span className="font-mono text-xs font-black text-white">
+                    {issue.repairProgress || 15}%
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { pct: 25, label: '25%' },
+                    { pct: 50, label: '50%' },
+                    { pct: 75, label: '75%' },
+                    { pct: 100, label: '100%' },
+                  ].map((m) => {
+                    const active = (issue.repairProgress || 0) >= m.pct
+                    return (
+                      <button
+                        key={m.pct}
+                        onClick={() => handleUpdateProgress(m.pct)}
+                        className={`py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          active
+                            ? 'bg-emerald-500 text-white shadow-xs'
+                            : 'bg-white/10 hover:bg-white/20 text-slate-300'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
             )}
 
             {/* Action 2: Upload After-Repair Photo */}

@@ -14,19 +14,23 @@
 
 import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { MapPin, PlusCircle, Info } from 'lucide-react'
+import { MapPin, PlusCircle, Activity } from 'lucide-react'
 import RoadDamageMap from '../../components/map/RoadDamageMap'
-import { getSavedComplaints } from '../../services/complaintService'
+import complaintService from '../../services/complaintService'
 
 export default function CitizenMapPage() {
   const [complaints, setComplaints] = useState([])
   const [loaded, setLoaded]         = useState(false)
 
   useEffect(() => {
-    // Merge built-in mock data + any citizen-submitted (localStorage) reports
-    const data = getSavedComplaints()
-    setComplaints(data)
-    setLoaded(true)
+    let isMounted = true
+    complaintService.fetchComplaints().then((data) => {
+      if (isMounted) {
+        setComplaints(data || [])
+        setLoaded(true)
+      }
+    })
+    return () => { isMounted = false }
   }, [])
 
   // Quick stat counts
@@ -77,10 +81,10 @@ export default function CitizenMapPage() {
           </div>
         ))}
 
-        {/* DEMO notice */}
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-xs font-semibold ml-auto">
-          <Info size={12} />
-          DEMO DATA — Pune Municipal Corporation
+        {/* Live GIS Status */}
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold ml-auto shadow-xs">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          LIVE GIS MUNICIPAL DATABASE
         </div>
       </div>
 

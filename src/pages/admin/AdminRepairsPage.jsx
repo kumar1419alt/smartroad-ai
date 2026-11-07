@@ -36,11 +36,50 @@ import {
 } from 'lucide-react'
 
 import { initialMockRepairs } from '../../data/mockRepairs'
+import complaintService from '../../services/complaintService'
 import RepairKanbanBoard from '../../components/admin/repairs/RepairKanbanBoard'
 import RepairDetailModal from '../../components/admin/repairs/RepairDetailModal'
 import { useToast } from '../../contexts/ToastContext'
 
 const REPAIRS_STORAGE_KEY = 'rds_admin_repairs_data'
+
+function complaintToRepair(c) {
+  const isResolved = (c.status || '').toLowerCase().includes('resolved') || (c.status || '').toLowerCase().includes('completed')
+  const inProgress = (c.status || '').toLowerCase().includes('progress')
+  const status = isResolved ? 'Resolved' : (inProgress ? 'In Progress' : 'Assigned')
+  const priorityScore = c.priorityScore ?? c.priority ?? 50
+  let priorityLevel = 'Low'
+  if (priorityScore >= 85) priorityLevel = 'Critical'
+  else if (priorityScore >= 70) priorityLevel = 'High'
+  else if (priorityScore >= 50) priorityLevel = 'Medium'
+
+  return {
+    id: `WO-${c.id}`,
+    complaintId: c.id,
+    damageType: c.damageType || 'Pothole',
+    location: c.location || 'Pune Municipal Road',
+    ward: c.ward || 'Ward 14',
+    coordinates: Array.isArray(c.coordinates) ? c.coordinates : [c.latitude || 18.5204, c.longitude || 73.8567],
+    severity: (c.severity || 'medium').toLowerCase(),
+    srps: priorityScore,
+    priorityLevel,
+    status,
+    repairProgress: c.repairProgress || (isResolved ? 100 : (inProgress ? 25 : 0)),
+    engineer: c.assignedEngineer || 'Er. Rajesh Kulkarni',
+    squad: c.assignedSquad || 'PMC Rapid Response Team #4',
+    phone: '+91 98230 11442',
+    assignedDate: c.date || 'Recent',
+    completionDate: isResolved ? (c.completionDate || 'Verified') : (c.estimatedFix || 'Scheduled Target'),
+    materials: 'Hot Mix Asphalt (VG-30 grade)',
+    equipment: 'Milling machine, Bitumen sprayer, Vibratory roller',
+    crewSize: 6,
+    beforeImage: c.imageUrl || '/sample-pothole.jpg',
+    afterImage: c.afterImageUrl || 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=800&q=80',
+    notes: c.statusNote || c.dispatchNote || c.description || 'Pavement maintenance order.',
+    qualityCheck: isResolved ? 'Verified' : 'Pending',
+    rawComplaint: c,
+  }
+}
 
 export default function AdminRepairsPage() {
   const toast = useToast()
@@ -49,21 +88,26 @@ export default function AdminRepairsPage() {
   const [selectedRepair, setSelectedRepair] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  // Load from storage or default mock
-  const loadData = () => {
+  // Load from backend service or default mock
+  const loadData = async () => {
     setIsRefreshing(true)
     try {
-      const raw = localStorage.getItem(REPAIRS_STORAGE_KEY)
-      if (raw) {
-        setRepairs(JSON.parse(raw))
+      const rawComplaints = await complaintService.fetchComplaints()
+      if (Array.isArray(rawComplaints) && rawComplaints.length > 0) {
+        const mapped = rawComplaints.map(complaintToRepair)
+        setRepairs(mapped)
+        localStorage.setItem(REPAIRS_STORAGE_KEY, JSON.stringify(mapped))
       } else {
-        setRepairs(initialMockRepairs)
-        localStorage.setItem(REPAIRS_STORAGE_KEY, JSON.stringify(initialMockRepairs))
+        const raw = localStorage.getItem(REPAIRS_STORAGE_KEY)
+        setRepairs(raw ? JSON.parse(raw) : initialMockRepairs)
       }
     } catch (err) {
-      setRepairs(initialMockRepairs)
+      console.warn('Failed to load repairs from backend:', err)
+      const raw = localStorage.getItem(REPAIRS_STORAGE_KEY)
+      setRepairs(raw ? JSON.parse(raw) : initialMockRepairs)
+    } finally {
+      setIsRefreshing(false)
     }
-    setTimeout(() => setIsRefreshing(false), 300)
   }
 
   useEffect(() => {
@@ -77,7 +121,21 @@ export default function AdminRepairsPage() {
   }
 
   // Update repair item
-  const handleUpdateRepair = (id, patch) => {
+  const handleUpdateRepair = async (id, patch) => {
+    const item = repairs.find((r) => r.id === id)
+    if (item?.complaintId) {
+      try {
+        if (patch.status) {
+          await complaintService.updateComplaintStatus(item.complaintId, {
+            status: patch.status,
+            note: patch.notes,
+          })
+        }
+      } catch (e) {
+        console.warn('Update status API failed:', e)
+      }
+    }
+
     const updated = repairs.map((r) => (r.id === id ? { ...r, ...patch } : r))
     saveRepairs(updated)
     if (selectedRepair?.id === id) {
@@ -86,7 +144,16 @@ export default function AdminRepairsPage() {
   }
 
   // Move stage directly from Kanban card
-  const handleMoveStage = (id, newStage) => {
+  const handleMoveStage = async (id, newStage) => {
+    const item = repairs.find((r) => r.id === id)
+    if (item?.complaintId) {
+      try {
+        await complaintService.updateComplaintStatus(item.complaintId, { status: newStage })
+      } catch (e) {
+        console.warn('Kanban move API failed:', e)
+      }
+    }
+
     const dateStamp =
       newStage === 'Resolved'
         ? new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })

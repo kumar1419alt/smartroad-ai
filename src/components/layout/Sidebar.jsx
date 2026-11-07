@@ -3,8 +3,8 @@
  * Collapses to icon-only mode on smaller screens.
  */
 
-import React, { useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import React from 'react'
+import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard,
   MapPin,
@@ -51,12 +51,13 @@ const NAV_ITEMS = [
   },
 ]
 
-export default function Sidebar({ collapsed, onToggle }) {
+export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }) {
   return (
     <aside
       className={cx(
-        'flex flex-col h-screen bg-[#0f2444] text-white transition-all duration-300 ease-in-out shrink-0',
-        collapsed ? 'w-16' : 'w-60',
+        'fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-72 flex-col bg-[#0f2444] text-white shadow-2xl transition-all duration-300 ease-in-out md:static md:z-auto md:h-screen md:shadow-none md:translate-x-0 shrink-0',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        collapsed ? 'md:w-16' : 'md:w-60',
       )}
       aria-label="Main navigation"
     >
@@ -87,6 +88,7 @@ export default function Sidebar({ collapsed, onToggle }) {
                   <NavLink
                     to={item.to}
                     end={item.end}
+                    onClick={onMobileClose}
                     aria-label={collapsed ? item.label : undefined}
                     className={({ isActive }) =>
                       cx(

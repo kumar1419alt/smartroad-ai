@@ -31,9 +31,9 @@ export default function ChangeStatusModal({
     }
   }, [isOpen, onClose])
 
-  if (!isOpen || !complaint) return null
+  const [selectedStatus, setSelectedStatus] = useState(complaint?.status || 'Pending')
 
-  const [selectedStatus, setSelectedStatus] = useState(complaint.status || 'Pending')
+  if (!isOpen || !complaint) return null
 
   const handleSave = () => {
     onStatusChange?.(complaint.id, selectedStatus)

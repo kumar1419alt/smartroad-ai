@@ -11,7 +11,8 @@
  * so status changes and engineer assignments immediately persist across views.
  */
 
-import { getSavedComplaints, saveComplaintLocally } from './complaintService'
+import apiClient from './apiClient'
+import { getSavedComplaints } from './complaintService'
 import { deriveFactorsForComplaint } from '../utils/srpsCalculator'
 
 const ADMIN_OVERRIDES_KEY = 'rds_admin_complaints_overrides'
@@ -58,9 +59,15 @@ export const adminService = {
    * Later maps to: GET /api/v1/admin/complaints
    */
   async getComplaints(filters = {}) {
-    await delay(200)
-
-    const baseList = getSavedComplaints()
+    let baseList
+    try {
+      const { data } = await apiClient.get('/admin/complaints', { params: filters })
+      baseList = Array.isArray(data) ? data : []
+    } catch (err) {
+      console.warn('[adminService] API unavailable; using local demo data.', err.message)
+      await delay(200)
+      baseList = getSavedComplaints()
+    }
     const overrides = getOverrides()
 
     // Merge base complaints with overrides and derive SRPS factors
@@ -91,9 +98,14 @@ export const adminService = {
    * Later maps to: GET /api/v1/admin/complaints/{id}
    */
   async getComplaintById(id) {
-    await delay(150)
-    const list = await this.getComplaints()
-    return list.find((c) => c.id === id) || null
+    if (!id) return null
+    try {
+      const { data } = await apiClient.get(`/complaints/${encodeURIComponent(id)}`)
+      return { ...data, ...deriveFactorsForComplaint(data) }
+    } catch {
+      const list = await this.getComplaints()
+      return list.find((c) => c.id === id || c.incidentId === id) || null
+    }
   },
 
   /**
@@ -101,13 +113,22 @@ export const adminService = {
    * Later maps to: PUT /api/v1/admin/complaints/{id}/status
    */
   async updateStatus(id, newStatus, note = '') {
-    await delay(300)
-    saveOverride(id, {
-      status: newStatus,
-      statusUpdatedAt: new Date().toISOString(),
-      statusNote: note,
-    })
-    return { success: true, id, status: newStatus }
+    try {
+      const { data } = await apiClient.put(`/admin/complaints/${encodeURIComponent(id)}/status`, {
+        status: newStatus,
+        note,
+      })
+      return { success: true, complaint: data, id: data.id, status: data.status }
+    } catch (err) {
+      console.warn('[adminService] Status update stored locally; API request failed.', err.message)
+      await delay(300)
+      saveOverride(id, {
+        status: newStatus,
+        statusUpdatedAt: new Date().toISOString(),
+        statusNote: note,
+      })
+      return { success: true, id, status: newStatus, offline: true }
+    }
   },
 
   /**
@@ -115,15 +136,26 @@ export const adminService = {
    * Later maps to: PUT /api/v1/admin/complaints/{id}/assign
    */
   async assignEngineer(id, payload = {}) {
-    await delay(350)
     const { assignedSquad, assignedEngineer, targetDate, note } = payload
-    saveOverride(id, {
-      assignedSquad,
-      assignedEngineer,
-      estimatedFix: targetDate,
-      dispatchNote: note,
-      status: 'In Progress', // Autotoggle to In Progress when crew is dispatched
-    })
-    return { success: true, id, payload }
+    try {
+      const { data } = await apiClient.put(`/admin/complaints/${encodeURIComponent(id)}/assign`, {
+        assignedSquad,
+        assignedEngineer,
+        targetDate,
+        note,
+      })
+      return { success: true, complaint: data, id: data.id, payload: data }
+    } catch (err) {
+      console.warn('[adminService] Assignment stored locally; API request failed.', err.message)
+      await delay(350)
+      saveOverride(id, {
+        assignedSquad,
+        assignedEngineer,
+        estimatedFix: targetDate,
+        dispatchNote: note,
+        status: 'In Progress',
+      })
+      return { success: true, id, payload, offline: true }
+    }
   },
 }

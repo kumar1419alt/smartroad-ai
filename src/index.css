@@ -86,16 +86,46 @@ html {
 
 body {
   margin: 0;
-  background-color: var(--color-slate-50);
+  background:
+    radial-gradient(circle at 0% 0%, rgb(219 234 254 / 0.55), transparent 28rem),
+    var(--color-slate-50);
   color: var(--color-slate-800);
   min-height: 100vh;
   line-height: 1.6;
+  overflow-x: hidden;
 }
 
 #root {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+}
+
+img, svg, video, canvas {
+  max-width: 100%;
+}
+
+button, a, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 639px) {
+  html { font-size: 15px; }
+
+  input, select, textarea { font-size: 16px; }
+
+  .leaflet-container { border-radius: 1rem !important; }
+
+  .recharts-responsive-container { min-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ─── Focus Visible ─────────────────────────────────────── */

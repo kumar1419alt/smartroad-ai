@@ -32,6 +32,7 @@ import {
 import { ENGINEER_PROFILE, MOCK_ENGINEER_ISSUES } from '../../data/mockEngineerData'
 import EngineerIssueDetailModal from '../../components/engineer/EngineerIssueDetailModal'
 import { FALLBACK_ROAD_IMAGE } from '../../utils/helpers'
+import complaintService from '../../services/complaintService'
 
 const STORAGE_KEY = 'rds_engineer_issues'
 
@@ -43,28 +44,37 @@ const SEVERITY_STYLES = {
 }
 
 const STATUS_STYLES = {
+  'Pending': 'bg-red-100 text-red-700',
   'Assigned': 'bg-blue-100 text-blue-700',
   'In Progress': 'bg-amber-100 text-amber-700',
+  'Scheduled': 'bg-purple-100 text-purple-700',
   'Resolved': 'bg-emerald-100 text-emerald-700',
+  'Completed': 'bg-emerald-100 text-emerald-700',
 }
 
 export default function EngineerDashboardPage() {
   const [issues, setIssues] = useState([])
   const [selectedIssue, setSelectedIssue] = useState(null)
 
-  // Load from localStorage or default mock
+  // Fetch real complaints from backend API
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        setIssues(JSON.parse(stored))
+    let isMounted = true
+    complaintService.fetchComplaints().then((data) => {
+      if (isMounted && Array.isArray(data) && data.length > 0) {
+        const mapped = data.map((c) => complaintService.complaintToIssue(c))
+        setIssues(mapped)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped))
       } else {
-        setIssues(MOCK_ENGINEER_ISSUES)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(MOCK_ENGINEER_ISSUES))
+        try {
+          const stored = localStorage.getItem(STORAGE_KEY)
+          if (stored) setIssues(JSON.parse(stored))
+          else setIssues(MOCK_ENGINEER_ISSUES)
+        } catch {
+          setIssues(MOCK_ENGINEER_ISSUES)
+        }
       }
-    } catch {
-      setIssues(MOCK_ENGINEER_ISSUES)
-    }
+    })
+    return () => { isMounted = false }
   }, [])
 
   const saveIssues = (updated) => {
@@ -72,20 +82,63 @@ export default function EngineerDashboardPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
   }
 
-  const handleUpdateIssue = (id, patch) => {
-    const updated = issues.map((issue) => (issue.id === id ? { ...issue, ...patch } : issue))
+  const handleUpdateIssue = async (id, patch) => {
+    try {
+      if (patch.repairProgress !== undefined) {
+        await complaintService.updateRepairProgress(id, {
+          repairProgress: patch.repairProgress,
+          status: patch.status,
+          note: patch.notes,
+        })
+      } else if (patch.status === 'In Progress' && (!patch.repairProgress || patch.repairProgress === 15)) {
+        await complaintService.acceptComplaint(id, {
+          engineerName: 'Er. Rajesh Kulkarni',
+          squad: 'Ward 14 Rapid Squad',
+          note: patch.notes || 'Accepted for field repair by engineer.',
+        })
+      } else if (patch.status) {
+        await complaintService.updateComplaintStatus(id, { status: patch.status, note: patch.notes })
+      }
+    } catch (err) {
+      console.warn('[EngineerDashboard] Update API fallback to local:', err)
+    }
+
+    const updated = issues.map((issue) => (issue.id === id || issue.complaintId === id ? { ...issue, ...patch } : issue))
     saveIssues(updated)
-    if (selectedIssue?.id === id) {
+    if (selectedIssue?.id === id || selectedIssue?.complaintId === id) {
       setSelectedIssue((prev) => ({ ...prev, ...patch }))
     }
   }
 
+  const handleAcceptComplaint = async (e, issue) => {
+    e.stopPropagation()
+    try {
+      await complaintService.acceptComplaint(issue.id || issue.complaintId, {
+        engineerName: 'Er. Rajesh Kulkarni',
+        squad: 'Ward 14 Rapid Squad',
+        note: 'Accepted by Er. Rajesh Kulkarni for on-site inspection & repair.',
+      })
+      const patch = {
+        status: 'In Progress',
+        assignedEngineer: 'Er. Rajesh Kulkarni',
+        assignedSquad: 'Ward 14 Rapid Squad',
+        repairProgress: Math.max(issue.repairProgress || 0, 15),
+      }
+      handleUpdateIssue(issue.id, patch)
+    } catch (err) {
+      console.error('Accept complaint failed:', err)
+    }
+  }
+
   // Stats
-  const assigned = issues.filter((i) => i.status === 'Assigned')
+  const openToAccept = issues.filter((i) => (i.status || '').toLowerCase().includes('pending'))
+  const assigned = issues.filter((i) => i.status === 'Assigned' || (i.status === 'In Progress' && i.assignedEngineer))
   const inProgress = issues.filter((i) => i.status === 'In Progress')
-  const resolved = issues.filter((i) => i.status === 'Resolved')
-  const critical = issues.filter((i) => i.severity === 'critical' && i.status !== 'Resolved')
-  const activeIssues = [...assigned, ...inProgress].sort((a, b) => b.srps - a.srps)
+  const resolved = issues.filter((i) => (i.status || '').toLowerCase().includes('resolved') || (i.status || '').toLowerCase().includes('completed'))
+  const critical = issues.filter((i) => i.severity === 'critical' && !((i.status || '').toLowerCase().includes('resolved')))
+  const activeIssues = issues
+    .filter((i) => !((i.status || '').toLowerCase().includes('resolved')) && !((i.status || '').toLowerCase().includes('completed')))
+    .sort((a, b) => (b.srps || 0) - (a.srps || 0))
 
   const kpiCards = [
     {
@@ -274,16 +327,43 @@ export default function EngineerDashboardPage() {
                       <p className="text-xs text-slate-700 leading-relaxed line-clamp-2">{issue.location}</p>
                     </div>
 
+                    {/* Repair Progress Bar */}
+                    {issue.repairProgress > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <div className="flex justify-between text-[10px] font-semibold text-slate-500">
+                          <span>Repair Progress</span>
+                          <span className="font-mono text-emerald-600">{issue.repairProgress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500"
+                            style={{ width: `${issue.repairProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between pt-1 border-t border-slate-100">
                       <div className="flex items-center gap-1 text-[11px] text-slate-500">
                         <Calendar size={12} />
                         {issue.assignedDate}
                       </div>
-                      <button className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 transition-colors group-hover:gap-1.5">
-                        <Eye size={12} />
-                        Open
-                        <ChevronRight size={12} className="transition-transform group-hover:translate-x-0.5" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {issue.status === 'Pending' && (
+                          <button
+                            onClick={(e) => handleAcceptComplaint(e, issue)}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] rounded-lg shadow-xs transition-colors flex items-center gap-1"
+                          >
+                            <PlayCircle size={11} />
+                            Accept
+                          </button>
+                        )}
+                        <button className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 hover:text-emerald-700 transition-colors group-hover:gap-1.5">
+                          <Eye size={12} />
+                          Open
+                          <ChevronRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

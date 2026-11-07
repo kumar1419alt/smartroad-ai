@@ -57,21 +57,21 @@ export default function RepairDetailModal({
     }
   }, [isOpen, onClose])
 
-  if (!isOpen || !repair) return null
-
   // Tab: 'overview' | 'before_after' | 'assign' | 'status'
   const [activeTab, setActiveTab] = useState('overview')
   const [imageComparisonMode, setImageComparisonMode] = useState('side_by_side') // 'side_by_side' | 'before' | 'after'
 
   // Editable fields
-  const [currentStatus, setCurrentStatus] = useState(repair.status || 'Assigned')
-  const [selectedSquad, setSelectedSquad] = useState(repair.squad || ENGINEERS_AND_SQUADS[0].squad)
-  const [selectedEngineer, setSelectedEngineer] = useState(repair.engineer || ENGINEERS_AND_SQUADS[0].lead)
+  const [currentStatus, setCurrentStatus] = useState(repair?.status || 'Assigned')
+  const [selectedSquad, setSelectedSquad] = useState(repair?.squad || ENGINEERS_AND_SQUADS[0].squad)
+  const [selectedEngineer, setSelectedEngineer] = useState(repair?.engineer || ENGINEERS_AND_SQUADS[0].lead)
   const [targetCompletionDate, setTargetCompletionDate] = useState(
-    repair.completionDate?.replace(' (Target)', '').replace(' (Completed)', '') || '2026-10-18'
+    repair?.completionDate?.replace(' (Target)', '').replace(' (Completed)', '') || '2026-10-18'
   )
-  const [repairNotes, setRepairNotes] = useState(repair.notes || '')
+  const [repairNotes, setRepairNotes] = useState(repair?.notes || '')
   const [savedSuccess, setSavedSuccess] = useState(false)
+
+  if (!isOpen || !repair) return null
 
   // Handle engineer selection change
   const handleSquadSelect = (unit) => {

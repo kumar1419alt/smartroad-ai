@@ -19,10 +19,10 @@ function Card({ children, noPadding = false, hoverable = false, className, ...re
   return (
     <div
       className={cx(
-        'bg-white rounded-xl border border-slate-200',
-        'shadow-[0_1px_3px_0_rgb(0_0_0/0.08),0_1px_2px_-1px_rgb(0_0_0/0.06)]',
-        !noPadding && 'p-5',
-        hoverable && 'transition-shadow duration-200 hover:shadow-[0_4px_6px_-1px_rgb(0_0_0/0.08),0_2px_4px_-2px_rgb(0_0_0/0.05)] cursor-pointer',
+        'bg-white/95 rounded-2xl border border-slate-200/80',
+        'shadow-[0_1px_2px_rgb(15_23_42/0.04),0_8px_24px_rgb(15_23_42/0.04)]',
+        !noPadding && 'p-4 sm:p-5',
+        hoverable && 'transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgb(15_23_42/0.10)] cursor-pointer',
         className,
       )}
       {...rest}
@@ -36,7 +36,7 @@ function CardHeader({ children, className, ...rest }) {
   return (
     <div
       className={cx(
-        'px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3',
+        'px-4 sm:px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3',
         className,
       )}
       {...rest}
@@ -48,7 +48,7 @@ function CardHeader({ children, className, ...rest }) {
 
 function CardBody({ children, className, ...rest }) {
   return (
-    <div className={cx('px-5 py-4', className)} {...rest}>
+    <div className={cx('px-4 sm:px-5 py-4', className)} {...rest}>
       {children}
     </div>
   )
@@ -58,7 +58,7 @@ function CardFooter({ children, className, ...rest }) {
   return (
     <div
       className={cx(
-        'px-5 py-3 border-t border-slate-100 flex items-center justify-between gap-3',
+        'px-4 sm:px-5 py-3 border-t border-slate-100 flex items-center justify-between gap-3',
         className,
       )}
       {...rest}

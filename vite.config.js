@@ -16,4 +16,18 @@ export default defineConfig({
   resolve: {
     dedupe: ['leaflet'],
   },
+  build: {
+    cssCodeSplit: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('recharts')) return 'charts'
+          if (id.includes('leaflet')) return 'maps'
+          if (id.includes('react-dom') || id.includes('react-router') || id.includes('/react/')) return 'react'
+          return undefined
+        },
+      },
+    },
+  },
 })

@@ -38,6 +38,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { MOCK_ENGINEER_ISSUES } from '../../data/mockEngineerData'
+import complaintService from '../../services/complaintService'
 import { useToast } from '../../contexts/ToastContext'
 
 const STORAGE_KEY = 'rds_engineer_issues'
@@ -52,8 +53,9 @@ const SEVERITY_PIN_COLORS = {
 }
 
 function createCustomPin(severity, status) {
-  const color = SEVERITY_PIN_COLORS[severity] || '#3b82f6'
-  const isResolved = status === 'Resolved'
+  const isPending = (status || '').toLowerCase().includes('pending')
+  const isResolved = (status || '').toLowerCase().includes('resolved')
+  const color = isPending ? '#a855f7' : (SEVERITY_PIN_COLORS[severity] || '#3b82f6')
   const isCritical = severity === 'critical' && !isResolved
 
   return L.divIcon({
@@ -68,7 +70,7 @@ function createCustomPin(severity, status) {
         <div style="width: 30px; height: 30px; border-radius: 50%; background-color: ${
           isResolved ? '#059669' : color
         }; border: 3px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 800;">
-          ${isResolved ? '✓' : '!'}
+          ${isResolved ? '✓' : isPending ? '?' : '!'}
         </div>
       </div>
     `,
@@ -94,33 +96,81 @@ export default function EngineerMapPage() {
   const [issues, setIssues] = useState([])
   const [selectedIssue, setSelectedIssue] = useState(null)
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all') // 'all' | 'Assigned' | 'In Progress' | 'Resolved'
+  const [statusFilter, setStatusFilter] = useState('all') // 'all' | 'Pending' | 'Assigned' | 'In Progress' | 'Resolved'
   const [severityFilter, setSeverityFilter] = useState('all')
   const [centerTarget, setCenterTarget] = useState(PUNE_ZONE4_CENTER)
   const [zoomTarget, setZoomTarget] = useState(13)
   const [gpsActive, setGpsActive] = useState(false)
 
-  // Load issues
+  // Load issues from real database / service
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      setIssues(stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES)
-    } catch {
-      setIssues(MOCK_ENGINEER_ISSUES)
+    let active = true
+    const loadIssues = async () => {
+      try {
+        const raw = await complaintService.fetchComplaints()
+        const normalized = (raw || []).map(complaintService.complaintToIssue)
+        if (active) {
+          setIssues(normalized)
+        }
+      } catch (err) {
+        console.warn('Load map issues failed:', err)
+        if (active) {
+          const stored = localStorage.getItem(STORAGE_KEY)
+          setIssues(stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES)
+        }
+      }
     }
+    loadIssues()
+    return () => { active = false }
   }, [])
 
-  const saveUpdatedIssue = (id, patch) => {
-    const updated = issues.map((i) => (i.id === id ? { ...i, ...patch } : i))
+  const saveUpdatedIssue = async (id, patch) => {
+    try {
+      if (patch.repairProgress !== undefined) {
+        await complaintService.updateRepairProgress(id, {
+          repairProgress: patch.repairProgress,
+          status: patch.status,
+          note: patch.notes,
+        })
+      } else if (patch.status === 'In Progress' && (!patch.repairProgress || patch.repairProgress === 15)) {
+        await complaintService.acceptComplaint(id, {
+          engineerName: 'Er. Rajesh Kulkarni',
+          squad: 'Ward 14 Rapid Squad',
+          note: patch.notes || 'Accepted for field repair by engineer.',
+        })
+      } else if (patch.status) {
+        await complaintService.updateComplaintStatus(id, {
+          status: patch.status,
+          note: patch.notes,
+        })
+      }
+    } catch (err) {
+      console.warn('API update failed in map:', err)
+    }
+
+    const updated = issues.map((i) => (i.id === id || i.complaintId === id ? { ...i, ...patch } : i))
     setIssues(updated)
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
     } catch (e) {
       console.warn('LocalStorage save failed', e)
     }
-    if (selectedIssue?.id === id) {
+    if (selectedIssue?.id === id || selectedIssue?.complaintId === id) {
       setSelectedIssue((prev) => ({ ...prev, ...patch }))
     }
+  }
+
+  const handleAcceptComplaint = async (id) => {
+    const patch = {
+      status: 'In Progress',
+      assignedEngineer: 'Er. Rajesh Kulkarni',
+      assignedSquad: 'Ward 14 Rapid Squad',
+      repairProgress: 15,
+      notes: 'Accepted by Er. Rajesh Kulkarni for on-site repair.',
+      startDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    }
+    await saveUpdatedIssue(id, patch)
+    toast.success(`Complaint ${id} accepted! Status: In Progress`)
   }
 
   const handleStartRepair = (id) => {
@@ -136,6 +186,7 @@ export default function EngineerMapPage() {
     const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
     saveUpdatedIssue(id, {
       status: 'Resolved',
+      repairProgress: 100,
       completionDate: dateStr,
       afterImage:
         selectedIssue?.afterImage ||
@@ -147,14 +198,20 @@ export default function EngineerMapPage() {
   // Filtered issues
   const filteredIssues = useMemo(() => {
     return issues.filter((i) => {
-      if (statusFilter !== 'all' && i.status !== statusFilter) return false
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'Pending') {
+          if (!((i.status || '').toLowerCase().includes('pending'))) return false
+        } else if (i.status !== statusFilter) {
+          return false
+        }
+      }
       if (severityFilter !== 'all' && i.severity !== severityFilter) return false
       if (search) {
         const q = search.toLowerCase()
         return (
-          i.complaintId.toLowerCase().includes(q) ||
-          i.damageType.toLowerCase().includes(q) ||
-          i.location.toLowerCase().includes(q)
+          (i.complaintId || '').toLowerCase().includes(q) ||
+          (i.damageType || '').toLowerCase().includes(q) ||
+          (i.location || '').toLowerCase().includes(q)
         )
       }
       return true
@@ -208,7 +265,7 @@ export default function EngineerMapPage() {
 
         {/* Quick Filter Pill Bar */}
         <div className="bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-slate-200/80 p-1.5 flex items-center gap-1 overflow-x-auto scrollbar-none text-[11px]">
-          {['all', 'Assigned', 'In Progress', 'Resolved'].map((st) => (
+          {['all', 'Pending', 'Assigned', 'In Progress', 'Resolved'].map((st) => (
             <button
               key={st}
               onClick={() => setStatusFilter(st)}
@@ -411,10 +468,20 @@ export default function EngineerMapPage() {
 
             {/* Quick Actions */}
             <div className="flex items-center gap-2 pt-1">
+              {selectedIssue.status === 'Pending' && (
+                <button
+                  onClick={() => handleAcceptComplaint(selectedIssue.id)}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs transition-colors shadow-xs cursor-pointer"
+                >
+                  <CheckCircle2 size={14} />
+                  Accept Complaint
+                </button>
+              )}
+
               {selectedIssue.status === 'Assigned' && (
                 <button
                   onClick={() => handleStartRepair(selectedIssue.id)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-colors shadow-xs"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-colors shadow-xs cursor-pointer"
                 >
                   <PlayCircle size={14} />
                   Start Repair
@@ -424,7 +491,7 @@ export default function EngineerMapPage() {
               {selectedIssue.status === 'In Progress' && (
                 <button
                   onClick={() => handleMarkResolved(selectedIssue.id)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-xs"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-xs cursor-pointer"
                 >
                   <CheckCircle2 size={14} />
                   Mark Resolved

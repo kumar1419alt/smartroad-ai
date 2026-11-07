@@ -207,6 +207,18 @@ export const detectionService = {
       const inferenceTime = Math.round(performance.now() - startTime)
       const data = response.data || {}
 
+      if (!data.success) {
+        return {
+          success: false,
+          is_simulated: false,
+          model: data.model || 'YOLOv8-RDD2022',
+          inference_time_ms: data.inference_time_ms ?? inferenceTime,
+          detections: [],
+          error: data.message || 'Inference could not be completed.',
+          status: data.status || 'inference_error',
+        }
+      }
+
       // Validate detections array
       const rawDetections = Array.isArray(data.detections) ? data.detections : []
       const validDetections = rawDetections
@@ -307,13 +319,11 @@ export const detectionService = {
    */
   async checkBackendHealth() {
     try {
-      const endpoint = localStorage.getItem(DASHCAM_STORAGE_KEYS.CUSTOM_ENDPOINT) || DEFAULT_DASHCAM_CONFIG.endpoint
-      // Send lightweight ping / options probe
       const res = await apiClient.get('/health', { timeout: 3000 })
       return {
         online: true,
         message: 'YOLO Inference Backend Connected',
-        modelInfo: res.data?.model || 'YOLOv8-RDD2022',
+        modelInfo: res.data?.yolo_model || 'YOLOv8-RDD2022',
       }
     } catch (err) {
       return {

@@ -18,7 +18,7 @@ import { cx } from '../../utils/helpers'
 
 const VARIANT_CLASSES = {
   primary:
-    'bg-blue-600 text-white border-transparent hover:bg-blue-700 active:bg-blue-800 shadow-sm',
+    'bg-blue-600 text-white border-transparent hover:bg-blue-700 active:bg-blue-800 shadow-[0_6px_14px_rgb(37_99_235/0.22)] hover:shadow-[0_8px_18px_rgb(37_99_235/0.28)]',
   secondary:
     'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 active:bg-slate-100 shadow-sm',
   ghost:
@@ -65,7 +65,7 @@ export default function Button({
       aria-busy={loading}
       className={cx(
         // Base
-        'inline-flex items-center justify-center font-medium rounded-md border transition-colors duration-150',
+        'inline-flex items-center justify-center font-semibold rounded-xl border transition-all duration-150 active:scale-[0.98]',
         'focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-2',
         'select-none cursor-pointer',
         // Variant

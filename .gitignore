@@ -48,6 +48,11 @@ backend/weights/*.pt
 backend/weights/*.onnx
 backend/weights/*.pth
 backend/weights/*.bin
+!backend/weights/.gitkeep
+
+# Scratch and Investigation
+scratch/
+investigation_output/
 
 # Editor & OS files
 .vscode/*

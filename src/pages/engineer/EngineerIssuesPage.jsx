@@ -24,6 +24,7 @@ import {
 import { MOCK_ENGINEER_ISSUES } from '../../data/mockEngineerData'
 import EngineerIssueDetailModal from '../../components/engineer/EngineerIssueDetailModal'
 import { FALLBACK_ROAD_IMAGE } from '../../utils/helpers'
+import complaintService from '../../services/complaintService'
 
 const STORAGE_KEY = 'rds_engineer_issues'
 
@@ -35,9 +36,12 @@ const SEVERITY_STYLES = {
 }
 
 const STATUS_STYLES = {
+  'Pending': 'bg-red-100 text-red-700',
   'Assigned': 'bg-blue-100 text-blue-700',
   'In Progress': 'bg-amber-100 text-amber-700',
+  'Scheduled': 'bg-purple-100 text-purple-700',
   'Resolved': 'bg-emerald-100 text-emerald-700',
+  'Completed': 'bg-emerald-100 text-emerald-700',
 }
 
 export default function EngineerIssuesPage() {
@@ -49,17 +53,23 @@ export default function EngineerIssuesPage() {
   const [sortBy, setSortBy] = useState('srps') // 'srps' | 'date' | 'severity'
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        setIssues(JSON.parse(stored))
+    let isMounted = true
+    complaintService.fetchComplaints().then((data) => {
+      if (isMounted && Array.isArray(data) && data.length > 0) {
+        const mapped = data.map((c) => complaintService.complaintToIssue(c))
+        setIssues(mapped)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped))
       } else {
-        setIssues(MOCK_ENGINEER_ISSUES)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(MOCK_ENGINEER_ISSUES))
+        try {
+          const stored = localStorage.getItem(STORAGE_KEY)
+          if (stored) setIssues(JSON.parse(stored))
+          else setIssues(MOCK_ENGINEER_ISSUES)
+        } catch {
+          setIssues(MOCK_ENGINEER_ISSUES)
+        }
       }
-    } catch {
-      setIssues(MOCK_ENGINEER_ISSUES)
-    }
+    })
+    return () => { isMounted = false }
   }, [])
 
   const saveIssues = (updated) => {
@@ -67,43 +77,89 @@ export default function EngineerIssuesPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
   }
 
-  const handleUpdateIssue = (id, patch) => {
-    const updated = issues.map((issue) => (issue.id === id ? { ...issue, ...patch } : issue))
+  const handleUpdateIssue = async (id, patch) => {
+    try {
+      if (patch.repairProgress !== undefined) {
+        await complaintService.updateRepairProgress(id, {
+          repairProgress: patch.repairProgress,
+          status: patch.status,
+          note: patch.notes,
+        })
+      } else if (patch.status === 'In Progress' && (!patch.repairProgress || patch.repairProgress === 15)) {
+        await complaintService.acceptComplaint(id, {
+          engineerName: 'Er. Rajesh Kulkarni',
+          squad: 'Ward 14 Rapid Squad',
+          note: patch.notes || 'Accepted for field repair by engineer.',
+        })
+      } else if (patch.status) {
+        await complaintService.updateComplaintStatus(id, { status: patch.status, note: patch.notes })
+      }
+    } catch (err) {
+      console.warn('[EngineerIssuesPage] Update API fallback to local:', err)
+    }
+
+    const updated = issues.map((issue) => (issue.id === id || issue.complaintId === id ? { ...issue, ...patch } : issue))
     saveIssues(updated)
-    if (selectedIssue?.id === id) {
+    if (selectedIssue?.id === id || selectedIssue?.complaintId === id) {
       setSelectedIssue((prev) => ({ ...prev, ...patch }))
+    }
+  }
+
+  const handleAcceptComplaint = async (e, issue) => {
+    e.stopPropagation()
+    try {
+      await complaintService.acceptComplaint(issue.id || issue.complaintId, {
+        engineerName: 'Er. Rajesh Kulkarni',
+        squad: 'Ward 14 Rapid Squad',
+        note: 'Accepted by Er. Rajesh Kulkarni for on-site inspection & repair.',
+      })
+      const patch = {
+        status: 'In Progress',
+        assignedEngineer: 'Er. Rajesh Kulkarni',
+        assignedSquad: 'Ward 14 Rapid Squad',
+        repairProgress: Math.max(issue.repairProgress || 0, 15),
+      }
+      handleUpdateIssue(issue.id, patch)
+    } catch (err) {
+      console.error('Accept complaint failed:', err)
     }
   }
 
   // Filter & Sort
   const filtered = issues
     .filter((i) => {
-      if (statusFilter !== 'all' && i.status !== statusFilter) return false
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'Pending') {
+          if (!((i.status || '').toLowerCase().includes('pending'))) return false
+        } else if (i.status !== statusFilter) {
+          return false
+        }
+      }
       if (severityFilter !== 'all' && i.severity !== severityFilter) return false
       if (search) {
         const q = search.toLowerCase()
         return (
-          i.complaintId.toLowerCase().includes(q) ||
-          i.damageType.toLowerCase().includes(q) ||
-          i.location.toLowerCase().includes(q)
+          (i.complaintId || '').toLowerCase().includes(q) ||
+          (i.damageType || '').toLowerCase().includes(q) ||
+          (i.location || '').toLowerCase().includes(q)
         )
       }
       return true
     })
     .sort((a, b) => {
-      if (sortBy === 'srps') return b.srps - a.srps
+      if (sortBy === 'srps') return (b.srps || 0) - (a.srps || 0)
       if (sortBy === 'severity') {
         const order = { critical: 0, high: 1, medium: 2, low: 3 }
         return (order[a.severity] ?? 4) - (order[b.severity] ?? 4)
       }
-      return 0 // date: keep original order (already by assignedDate)
+      return 0 // date: keep original order
     })
 
   const counts = {
     all: issues.length,
-    Assigned: issues.filter((i) => i.status === 'Assigned').length,
+    Pending: issues.filter((i) => (i.status || '').toLowerCase().includes('pending')).length,
     'In Progress': issues.filter((i) => i.status === 'In Progress').length,
-    Resolved: issues.filter((i) => i.status === 'Resolved').length,
+    Resolved: issues.filter((i) => (i.status || '').toLowerCase().includes('resolved') || (i.status || '').toLowerCase().includes('completed')).length,
   }
 
   return (

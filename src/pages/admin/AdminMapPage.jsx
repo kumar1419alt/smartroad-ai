@@ -14,16 +14,42 @@
 
 import React, { useState, useEffect } from 'react'
 import AdminGisMap from '../../components/admin/map/AdminGisMap'
-import { getSavedComplaints } from '../../services/complaintService'
+import complaintService, { getSavedComplaints } from '../../services/complaintService'
+import { adminService } from '../../services/adminService'
 
 export default function AdminMapPage() {
   const [complaints, setComplaints] = useState([])
 
   useEffect(() => {
-    setComplaints(getSavedComplaints())
+    let active = true
+    const loadData = async () => {
+      try {
+        const list = await complaintService.fetchComplaints()
+        if (active && Array.isArray(list) && list.length > 0) {
+          setComplaints(list)
+          return
+        }
+      } catch (err) {
+        console.warn('Admin map fetch failed:', err)
+      }
+      if (active) setComplaints(getSavedComplaints())
+    }
+    loadData()
+    return () => { active = false }
   }, [])
 
-  const handleUpdateComplaint = (id, updatedFields) => {
+  const handleUpdateComplaint = async (id, updatedFields) => {
+    try {
+      if (updatedFields.status) {
+        await complaintService.updateComplaintStatus(id, { status: updatedFields.status })
+      }
+      if (updatedFields.assignedEngineer || updatedFields.assignedSquad) {
+        await adminService.assignEngineer(id, updatedFields)
+      }
+    } catch (err) {
+      console.warn('Admin map update API failed:', err)
+    }
+
     setComplaints((prev) =>
       prev.map((c) => (c.id === id ? { ...c, ...updatedFields } : c))
     )

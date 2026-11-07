@@ -19,13 +19,13 @@ const CREWS = [
 ]
 
 export default function AdminDispatchModal({ issue, isOpen, onClose, onConfirmDispatch }) {
-  if (!isOpen || !issue) return null
-
-  const [squad, setSquad] = useState(issue.assignedSquad || CREWS[0])
+  const [squad, setSquad] = useState(issue?.assignedSquad || CREWS[0])
   const [scheduledDate, setScheduledDate] = useState('2026-10-16')
   const [material, setMaterial] = useState('Hot Mix Asphalt (2.5 tonnes)')
   const [priorityNote, setPriorityNote] = useState('High traffic corridor — schedule during night window (11 PM - 5 AM).')
   const [submitting, setSubmitting] = useState(false)
+
+  if (!isOpen || !issue) return null
 
   const handleSubmit = (e) => {
     e.preventDefault()

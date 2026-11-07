@@ -295,3 +295,62 @@ class TestAssignEngineer:
             json={"assignedSquad": "Squad Delta"},
         )
         assert response.status_code == 404
+
+
+# ── PUT /api/v1/complaints/{id}/accept & repair-progress & stats ───────────────
+
+class TestEngineerComplaintWorkflow:
+
+    def test_accept_complaint(self, client):
+        created = create_complaint(client).json()
+        assert created["status"] == "Pending"
+        assert created["assignedEngineer"] is None
+
+        response = client.put(
+            f"/api/v1/complaints/{created['id']}/accept",
+            json={
+                "engineerName": "Er. Rajesh Kulkarni",
+                "squad": "Squad 4",
+                "note": "Accepted complaint for repair.",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["assignedEngineer"] == "Er. Rajesh Kulkarni"
+        assert data["status"] == "In Progress"
+        assert data["repairProgress"] >= 15
+        assert data["dispatchNote"] == "Accepted complaint for repair."
+
+    def test_update_repair_progress(self, client):
+        created = create_complaint(client).json()
+        # Update progress to 50%
+        res50 = client.put(
+            f"/api/v1/complaints/{created['id']}/repair-progress",
+            json={"repairProgress": 50, "note": "Sub-base layer compacted."},
+        )
+        assert res50.status_code == 200
+        d50 = res50.json()
+        assert d50["repairProgress"] == 50
+        assert d50["status"] == "In Progress"
+
+        # Update progress to 100% -> should auto-resolve
+        res100 = client.put(
+            f"/api/v1/complaints/{created['id']}/repair-progress",
+            json={"repairProgress": 100, "note": "Asphalt sealing completed."},
+        )
+        assert res100.status_code == 200
+        d100 = res100.json()
+        assert d100["repairProgress"] == 100
+        assert d100["status"] == "Resolved"
+
+    def test_stats_summary(self, client):
+        create_complaint(client, {"severity": "critical", "priorityScore": 95})
+        create_complaint(client, {"severity": "low", "priorityScore": 30})
+
+        res = client.get("/api/v1/complaints/stats/summary")
+        assert res.status_code == 200
+        stats = res.json()
+        assert stats["total_complaints"] >= 2
+        assert stats["critical"] >= 1
+        assert stats["low"] >= 1
+        assert "average_priority" in stats

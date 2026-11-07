@@ -219,6 +219,43 @@ class ComplaintAssignUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
+class ComplaintAcceptRequest(BaseModel):
+    """Schema for an engineer accepting a road damage complaint."""
+    engineer_name: str = Field(..., alias="engineerName")
+    squad: Optional[str] = None
+    note: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class ComplaintProgressUpdateRequest(BaseModel):
+    """Schema for an engineer updating repair progress."""
+    repair_progress: int = Field(..., ge=0, le=100, alias="repairProgress")
+    status: Optional[str] = None
+    note: Optional[str] = None
+    estimated_fix: Optional[str] = Field(None, alias="estimatedFix")
+    after_image_url: Optional[str] = Field(None, alias="afterImageUrl")
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class StatsSummaryResponse(BaseModel):
+    """Aggregated real-time statistics across all complaints."""
+    total_complaints: int
+    pending: int
+    in_progress: int
+    scheduled: int
+    resolved: int
+    critical: int
+    high: int
+    medium: int
+    low: int
+    average_priority: float
+    high_priority_count: int
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
 # ── AI Detection Schemas ───────────────────────────────────────────────────────
 
 class DetectionBox(BaseModel):

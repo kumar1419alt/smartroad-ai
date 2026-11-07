@@ -32,9 +32,9 @@ export default function AdminIssueDetailModal({
   onStatusChange,
   onDispatch,
 }) {
-  if (!isOpen || !issue) return null
+  const [selectedStatus, setSelectedStatus] = useState(issue?.status || 'Pending')
 
-  const [selectedStatus, setSelectedStatus] = useState(issue.status || 'Pending')
+  if (!isOpen || !issue) return null
   const score = issue.priority ?? issue.priorityScore ?? 50
 
   const handleSaveStatus = () => {

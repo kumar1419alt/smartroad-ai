@@ -58,7 +58,7 @@ export default function DamageAnalysisCard({
           YOLOv8m Scanning Image…
         </h3>
         <p className="text-xs text-slate-500 max-w-sm mx-auto">
-          Sending frame to FastAPI backend — detecting RDD2022 road damage classes.
+          Sending frame to FastAPI backend (threshold: 50%) — detecting RDD2022 road damage classes.
         </p>
       </div>
     )
@@ -87,9 +87,12 @@ export default function DamageAnalysisCard({
     status = 'success',
     boundingBoxes = [],
     detectionCount = 0,
+    confidenceThreshold = 0.50,
     backendUnavailable = false,
   } = analysis
 
+  const activeThreshold = typeof confidenceThreshold === 'number' ? confidenceThreshold : 0.50
+  const activeThresholdPct = Math.round(activeThreshold * 100)
   const confidencePct = confidence > 0 ? `${Math.round(confidence * 1000) / 10}%` : '—'
   const isNoDetection = detectionCount === 0 && status === 'success'
   const isBackendIssue = backendUnavailable || status === 'backend_unavailable'
@@ -164,13 +167,22 @@ export default function DamageAnalysisCard({
         )}
       </div>
 
-      {/* Inference time badge */}
-      {inferenceTimeMs > 0 && (
-        <div className="flex items-center gap-1 text-[10px] text-slate-400 -mt-2">
-          <Clock size={10} />
-          <span>Inference: {inferenceTimeMs} ms</span>
+      {/* Inference metrics & Active Confidence Threshold */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 -mt-2">
+        {inferenceTimeMs > 0 && (
+          <div className="flex items-center gap-1">
+            <Clock size={11} className="text-slate-400" />
+            <span>Inference: <strong className="font-mono text-slate-700">{inferenceTimeMs} ms</strong></span>
+          </div>
+        )}
+        {inferenceTimeMs > 0 && <span className="text-slate-300">·</span>}
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-400">Confidence Threshold:</span>
+          <span className="font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded text-[10px]">
+            {activeThresholdPct}% ({activeThreshold.toFixed(2)})
+          </span>
         </div>
-      )}
+      </div>
 
       {/* Image with Real Bounding Box Overlay */}
       {imagePreview && (
@@ -224,9 +236,9 @@ export default function DamageAnalysisCard({
 
           {/* No detection overlay */}
           {isNoDetection && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-              <span className="text-white text-xs font-semibold bg-black/50 px-3 py-1.5 rounded-full">
-                No damage detected at threshold 70%
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+              <span className="text-white text-xs font-semibold bg-black/60 px-3.5 py-1.5 rounded-full border border-white/20">
+                No damage detected at threshold {activeThresholdPct}%
               </span>
             </div>
           )}
@@ -253,7 +265,7 @@ export default function DamageAnalysisCard({
             )}
           </div>
           <span className="text-[10px] text-slate-400 mt-0.5 block">
-            {detectionCount} detection{detectionCount !== 1 ? 's' : ''} found
+            {detectionCount} detection{detectionCount !== 1 ? 's' : ''} found (conf ≥ {activeThresholdPct}%)
           </span>
         </div>
 

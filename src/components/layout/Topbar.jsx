@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Search, Bell, User, ChevronRight, LogOut, Shield, Wrench, UserCheck } from 'lucide-react'
+import { Search, Bell, ChevronRight, LogOut, Menu } from 'lucide-react'
 import { cx } from '../../utils/helpers'
 import { APP_NAME, ROLE_LABELS } from '../../constants'
 import { useAuth } from '../../contexts/AuthContext'
@@ -21,7 +21,7 @@ const ROUTE_LABELS = {
   '/admin/dashboard': 'Municipal Administration',
 }
 
-export default function Topbar() {
+export default function Topbar({ onMenuClick }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { user, logout } = useAuth()
@@ -37,12 +37,20 @@ export default function Topbar() {
   const roleLabel = user?.role ? (ROLE_LABELS[user.role] || user.role) : 'User'
 
   return (
-    <header className="h-14 bg-white border-b border-slate-200 flex items-center px-5 gap-4 shrink-0 z-10">
+    <header className="h-16 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 flex items-center px-4 sm:px-5 gap-3 shrink-0 z-10 shadow-[0_1px_0_rgb(15_23_42/0.03)]">
+      <button
+        type="button"
+        onClick={onMenuClick}
+        className="md:hidden inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100"
+        aria-label="Open navigation menu"
+      >
+        <Menu size={20} />
+      </button>
       {/* Breadcrumb */}
       <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm mr-auto">
         <span className="text-slate-400 hidden sm:block">{APP_NAME}</span>
         <ChevronRight size={13} className="text-slate-300 hidden sm:block" aria-hidden="true" />
-        <span className="font-medium text-slate-700">{currentPage}</span>
+        <span className="font-semibold text-slate-700 truncate max-w-[11rem] sm:max-w-none">{currentPage}</span>
       </nav>
 
       {/* Search */}

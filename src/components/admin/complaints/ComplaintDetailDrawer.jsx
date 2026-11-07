@@ -52,13 +52,11 @@ export default function ComplaintDetailDrawer({
   onUpdateStatus,
   onAssignEngineer,
 }) {
-  if (!isOpen || !complaint) return null
-
   // Tab navigation inside drawer
   const [activeTab, setActiveTab] = useState('overview') // 'overview' | 'location' | 'ai' | 'priority' | 'actions'
 
   // Form states
-  const [selectedStatus, setSelectedStatus] = useState(complaint.status || 'Pending')
+  const [selectedStatus, setSelectedStatus] = useState(complaint?.status || 'Pending')
   const [selectedSquadIdx, setSelectedSquadIdx] = useState(0)
   const [targetDate, setTargetDate] = useState('2026-10-18')
   const [dispatchNote, setDispatchNote] = useState('Inspect surface deformation and coordinate traffic management.')
@@ -70,12 +68,12 @@ export default function ComplaintDetailDrawer({
   const mapContainerRef = useRef(null)
   const mapInstanceRef = useRef(null)
 
-  const coords = complaint.coordinates?.length === 2 ? complaint.coordinates : [18.5186, 73.8415]
-  const score = complaint.priority ?? complaint.priorityScore ?? 75
+  const coords = complaint?.coordinates?.length === 2 ? complaint.coordinates : [18.5186, 73.8415]
+  const score = complaint?.priority ?? complaint?.priorityScore ?? 75
 
   // Initialize mini-map when 'location' tab is active
   useEffect(() => {
-    if (activeTab !== 'location' || !mapContainerRef.current) return
+    if (!isOpen || !complaint || activeTab !== 'location' || !mapContainerRef.current) return
 
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove()
@@ -113,7 +111,9 @@ export default function ComplaintDetailDrawer({
         mapInstanceRef.current = null
       }
     }
-  }, [activeTab, coords])
+  }, [activeTab, complaint, coords, isOpen])
+
+  if (!isOpen || !complaint) return null
 
   // Status update submit
   const handleStatusSubmit = async (e) => {

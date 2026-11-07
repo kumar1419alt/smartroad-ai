@@ -23,25 +23,30 @@ import {
 } from 'lucide-react'
 
 export default function OfficerAssignmentCard({ complaint }) {
-  const officer = complaint?.repairOfficer || {
-    name: 'Ramesh Kumar',
-    title: 'Senior Repair Officer / Field Engineer',
-    department: 'Zone-C Rapid Pavement Unit, PMC',
+  const assignedName = complaint?.assignedEngineer || 'Er. Rajesh Kulkarni'
+  const isAssigned = Boolean(complaint?.assignedEngineer)
+  const initials = assignedName.split(' ').filter(p => !p.startsWith('Er.')).map(p => p[0]).join('').slice(0, 2) || 'RK'
+
+  const officer = {
+    name: assignedName,
+    title: isAssigned ? 'Assigned Field Engineer / Repair Officer' : 'Supervising Field Officer (PMC)',
+    department: complaint?.assignedSquad || 'Zone-C Rapid Pavement Unit, PMC',
     phone: '+91 98111 54321',
     email: 'engineer@smartroad.gov',
-    badgeId: 'PMC-ENG-082',
+    badgeId: isAssigned ? 'PMC-ENG-082' : 'PMC-PENDING',
   }
 
   const workOrder = complaint?.workOrder || {
-    id: `WO-PN-2026-${complaint?.id ? complaint.id.slice(-3) : '084'}`,
+    id: `WO-PN-2026-${complaint?.id ? complaint.id.slice(-4) : '084'}`,
     crewSize: 6,
     equipment: 'Milling machine, Bitumen sprayer, 3-ton vibratory roller',
     materials: '1.8 tonnes Hot Mix Asphalt (VG-30 grade)',
-    scheduledDate: complaint?.estimatedFix || '15 Oct 2026',
+    scheduledDate: complaint?.estimatedFix || 'Scheduled within 48 hrs',
   }
 
   const isResolved = (complaint?.status || '').toLowerCase().includes('resolved')
   const inProgress = (complaint?.status || '').toLowerCase().includes('progress')
+  const progressPct = complaint?.repairProgress ?? (isResolved ? 100 : inProgress ? 40 : 0)
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-7 shadow-xs space-y-5">
@@ -62,11 +67,35 @@ export default function OfficerAssignmentCard({ complaint }) {
         </span>
       </div>
 
+      {/* Live Repair Progress Bar */}
+      <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-bold text-blue-900 flex items-center gap-1.5">
+            <Wrench size={14} className="text-blue-600" />
+            Live Repair Execution Progress
+          </span>
+          <span className="font-mono font-extrabold text-blue-700 bg-white px-2 py-0.5 rounded border border-blue-200">
+            {progressPct}%
+          </span>
+        </div>
+        <div className="w-full bg-blue-200/60 rounded-full h-3 overflow-hidden shadow-inner">
+          <div
+            className={`h-3 rounded-full transition-all duration-700 ${progressPct >= 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
+            style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
+          />
+        </div>
+        {complaint?.statusNote && (
+          <p className="text-[11px] text-blue-800 font-medium pt-1">
+            <strong>Latest Engineer Note:</strong> {complaint.statusNote}
+          </p>
+        )}
+      </div>
+
       {/* Officer Profile Card */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold text-base shadow-xs shrink-0">
-            RK
+            {initials}
           </div>
           <div>
             <div className="flex items-center gap-2">

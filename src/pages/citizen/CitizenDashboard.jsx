@@ -47,7 +47,7 @@ import MiniRoadMap from '../../components/citizen/MiniRoadMap'
 import RecentActivity from '../../components/citizen/RecentActivity'
 import ComplaintDetailModal from '../../components/citizen/ComplaintDetailModal'
 import QuickReportModal from '../../components/citizen/QuickReportModal'
-import { getSavedComplaints } from '../../services/complaintService'
+import complaintService, { getSavedComplaints } from '../../services/complaintService'
 
 export default function CitizenDashboard() {
   const { user } = useAuth()
@@ -55,10 +55,44 @@ export default function CitizenDashboard() {
 
   // State
   const [complaints, setComplaints] = useState(() => getSavedComplaints())
-  const [activities, setActivities] = useState(mockPuneActivities)
+  const [activities, setActivities] = useState([])
   const [selectedComplaint, setSelectedComplaint] = useState(null)
   const [isReportModalOpen, setIsReportModalOpen] = useState(false)
   const [activeStatFilter, setActiveStatFilter] = useState('all')
+
+  // Fetch real complaints from backend API on mount
+  useEffect(() => {
+    let isMounted = true
+    complaintService.fetchComplaints().then((data) => {
+      if (isMounted && Array.isArray(data)) {
+        setComplaints(data)
+      }
+    })
+    return () => { isMounted = false }
+  }, [])
+
+  // Derive dynamic activity feed from live database complaints
+  useEffect(() => {
+    if (complaints && complaints.length > 0) {
+      const liveActivities = complaints.slice(0, 5).map((c, i) => ({
+        id: `act-${c.id}-${i}`,
+        type: (c.status || '').toLowerCase().includes('resolved')
+          ? 'resolved'
+          : (c.status || '').toLowerCase().includes('progress')
+          ? 'in_progress'
+          : 'pending',
+        title: `${c.damageType} — ${c.status || 'Pending'}`,
+        description: c.assignedEngineer
+          ? `Assigned to ${c.assignedEngineer} (${c.assignedSquad || 'Municipal Squad'}). Repair Progress: ${c.repairProgress || 0}%`
+          : `Reported at ${c.location}. Priority Score: ${c.priority || c.priorityScore || 50}/100`,
+        location: c.location,
+        time: c.date || 'Recent',
+        complaintId: c.id,
+        badge: c.status || 'Pending',
+      }))
+      setActivities(liveActivities)
+    }
+  }, [complaints])
 
   // Calculate live stats
   const totalCount = complaints.length

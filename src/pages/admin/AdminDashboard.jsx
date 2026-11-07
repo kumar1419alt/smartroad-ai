@@ -48,39 +48,58 @@ import AdminIssueDetailModal from '../../components/admin/AdminIssueDetailModal'
 import AdminDispatchModal from '../../components/admin/AdminDispatchModal'
 import RoadDamageMap from '../../components/map/RoadDamageMap'
 
-import { getSavedComplaints } from '../../services/complaintService'
+import complaintService, { getSavedComplaints } from '../../services/complaintService'
+import { adminService } from '../../services/adminService'
 import { mockDashboardSummary } from '../../data/mockData'
 import { useToast } from '../../contexts/ToastContext'
 
 export default function AdminDashboard() {
   const toast = useToast()
   const [complaints, setComplaints] = useState([])
+  const [summaryStats, setSummaryStats] = useState(null)
   const [inspectIssue, setInspectIssue] = useState(null)
   const [dispatchIssue, setDispatchIssue] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [lastSyncTime, setLastSyncTime] = useState('Just now')
 
-  // Load complaints (built-in + local storage reports)
-  const loadData = (showToast = false) => {
+  // Load complaints and real municipal metrics from database
+  const loadData = async (showToast = false) => {
     setIsRefreshing(true)
-    const data = getSavedComplaints()
-    setComplaints(data)
-    setTimeout(() => {
+    try {
+      const [list, summary] = await Promise.all([
+        complaintService.fetchComplaints(),
+        complaintService.fetchStatsSummary(),
+      ])
+      setComplaints(list || [])
+      setSummaryStats(summary)
+    } catch (err) {
+      console.warn('Dashboard data fetch failed:', err)
+      const data = getSavedComplaints()
+      setComplaints(data)
+    } finally {
       setIsRefreshing(false)
       const now = new Date()
       setLastSyncTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
       if (showToast) {
         toast.info('Road infrastructure telemetry synchronized.')
       }
-    }, 400)
+    }
   }
 
   useEffect(() => {
     loadData()
   }, [])
 
-  // Dynamic calculations based on active dataset
+  // Dynamic calculations based on active dataset (real database values)
   const stats = useMemo(() => {
+    if (summaryStats) {
+      return {
+        totalComplaints: summaryStats.total_complaints,
+        criticalIssues: summaryStats.critical,
+        pendingIssues: summaryStats.pending,
+        resolvedIssues: summaryStats.resolved,
+      }
+    }
     const total = complaints.length
     const critical = complaints.filter(
       (c) => (c.severity || '').toLowerCase() === 'critical'
@@ -89,27 +108,36 @@ export default function AdminDashboard() {
       (c) => (c.status || '').toLowerCase().includes('pending')
     ).length
     const resolved = complaints.filter(
-      (c) => (c.status || '').toLowerCase().includes('resolved')
+      (c) => (c.status || '').toLowerCase().includes('resolved') || (c.status || '').toLowerCase().includes('completed')
     ).length
 
     return {
-      // Scale up by realistic municipal multiplier for high-level command view
-      totalComplaints: 1240 + total,
-      criticalIssues: 42 + critical,
-      pendingIssues: 254 + pending,
-      resolvedIssues: 810 + resolved,
+      totalComplaints: total,
+      criticalIssues: critical,
+      pendingIssues: pending,
+      resolvedIssues: resolved,
     }
-  }, [complaints])
+  }, [complaints, summaryStats])
 
   // Handle status update from modal
-  const handleStatusChange = (id, newStatus) => {
+  const handleStatusChange = async (id, newStatus) => {
+    try {
+      await complaintService.updateComplaintStatus(id, { status: newStatus })
+    } catch (err) {
+      console.warn('Admin status update API error:', err)
+    }
     setComplaints((prev) =>
       prev.map((c) => (c.id === id ? { ...c, status: newStatus } : c))
     )
   }
 
   // Handle squad dispatch confirmation
-  const handleConfirmDispatch = (id, updateData) => {
+  const handleConfirmDispatch = async (id, updateData) => {
+    try {
+      await adminService.assignEngineer(id, updateData)
+    } catch (err) {
+      console.warn('Admin dispatch API error:', err)
+    }
     setComplaints((prev) =>
       prev.map((c) => (c.id === id ? { ...c, ...updateData } : c))
     )

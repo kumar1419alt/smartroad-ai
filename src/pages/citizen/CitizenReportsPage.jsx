@@ -30,7 +30,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import StatusBadge from '../../components/citizen/StatusBadge'
-import { getSavedComplaints } from '../../services/complaintService'
+import complaintService, { getSavedComplaints } from '../../services/complaintService'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -354,13 +354,16 @@ export default function CitizenReportsPage() {
   const [page, setPage]                   = useState(1)
   const [showFilters, setShowFilters]     = useState(false)
 
-  // Simulated load delay
+  // Fetch real complaints from backend API
   useEffect(() => {
-    const t = setTimeout(() => {
-      setAllComplaints(getSavedComplaints())
-      setLoading(false)
-    }, 700)
-    return () => clearTimeout(t)
+    let isMounted = true
+    complaintService.fetchComplaints().then((data) => {
+      if (isMounted) {
+        setAllComplaints(data || getSavedComplaints())
+        setLoading(false)
+      }
+    })
+    return () => { isMounted = false }
   }, [])
 
   // Reset page on filter change

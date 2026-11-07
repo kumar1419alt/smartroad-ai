@@ -75,7 +75,7 @@ export default function ReportForm({ onReportSubmitted }) {
     setIsAnalyzing(true)
     try {
       const gps = { latitude, longitude }
-      const pred = await complaintService.predictDamage(fileOrUrl, { gps })
+      const pred = await complaintService.predictDamage(fileOrUrl, { gps, confidenceThreshold: 0.50 })
       setAnalysisResult(pred)
 
       // Calculate SRPS using only real available inputs:

@@ -29,8 +29,11 @@ const delay = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms))
 export function getSavedComplaints() {
   try {
     const raw = localStorage.getItem(LOCAL_COMPLAINTS_KEY)
-    const local = raw ? JSON.parse(raw) : []
-    return [...local, ...mockPuneComplaints]
+    if (raw) {
+      const local = JSON.parse(raw)
+      if (Array.isArray(local) && local.length > 0) return local
+    }
+    return mockPuneComplaints
   } catch (err) {
     console.error('Failed to parse complaints from storage', err)
     return mockPuneComplaints
@@ -42,7 +45,12 @@ export function saveComplaintLocally(complaint) {
   try {
     const raw = localStorage.getItem(LOCAL_COMPLAINTS_KEY)
     const list = raw ? JSON.parse(raw) : []
-    list.unshift(complaint)
+    const existingIdx = list.findIndex(c => c.id === complaint.id)
+    if (existingIdx >= 0) {
+      list[existingIdx] = { ...list[existingIdx], ...complaint }
+    } else {
+      list.unshift(complaint)
+    }
     localStorage.setItem(LOCAL_COMPLAINTS_KEY, JSON.stringify(list))
   } catch (err) {
     console.error('Failed to store complaint locally', err)
@@ -115,7 +123,7 @@ export const complaintService = {
    *
    * @param {File|string} imageFileOrUrl
    * @param {object} [options]
-   * @param {number} [options.confidenceThreshold=0.70]
+   * @param {number} [options.confidenceThreshold=0.50]
    * @param {{ latitude: number, longitude: number }|null} [options.gps=null]
    * @returns {Promise<{
    *   damageType: string,
@@ -127,12 +135,13 @@ export const complaintService = {
    *   status: string,
    *   boundingBoxes: Array<{ id: string, label: string, confidence: number, box: { x,y,w,h } }>,
    *   detectionCount: number,
+   *   confidenceThreshold: number,
    *   isBackendResult: boolean,
    *   backendUnavailable: boolean,
    * }>}
    */
   async predictDamage(imageFileOrUrl, options = {}) {
-    const { confidenceThreshold = 0.70, gps = null } = options
+    const { confidenceThreshold = 0.50, gps = null } = options
 
     // Convert image to base64 (required by API)
     let imageB64
@@ -140,7 +149,7 @@ export const complaintService = {
       imageB64 = await imageToBase64(imageFileOrUrl)
     } catch (convErr) {
       console.error('[complaintService] Image conversion failed:', convErr)
-      return this._backendUnavailableResult()
+      return this._backendUnavailableResult(confidenceThreshold)
     }
 
     // Build request payload matching the DetectionRequest schema
@@ -158,11 +167,11 @@ export const complaintService = {
 
       if (!data || data.status === 'model_not_configured') {
         // Backend is up but model weights are not loaded
-        return this._modelNotConfiguredResult(data)
+        return this._modelNotConfiguredResult(data, confidenceThreshold)
       }
 
       if (data.status === 'invalid_image') {
-        return this._invalidImageResult(data)
+        return this._invalidImageResult(data, confidenceThreshold)
       }
 
       // Parse the real detections
@@ -190,6 +199,7 @@ export const complaintService = {
         status: data.status || 'success',
         boundingBoxes,
         detectionCount: detections.length,
+        confidenceThreshold,
         isBackendResult: true,
         backendUnavailable: false,
         // Physical dimensions cannot be measured from a single uncalibrated image
@@ -197,12 +207,12 @@ export const complaintService = {
       }
     } catch (err) {
       console.error('[complaintService] Backend inference failed:', err)
-      return this._backendUnavailableResult()
+      return this._backendUnavailableResult(confidenceThreshold)
     }
   },
 
   /** Result when the backend is unreachable */
-  _backendUnavailableResult() {
+  _backendUnavailableResult(confidenceThreshold = 0.50) {
     return {
       damageType: 'Unknown (Backend Offline)',
       damageCode: null,
@@ -213,6 +223,7 @@ export const complaintService = {
       status: 'backend_unavailable',
       boundingBoxes: [],
       detectionCount: 0,
+      confidenceThreshold,
       isBackendResult: false,
       backendUnavailable: true,
       dimensions: null,
@@ -220,7 +231,7 @@ export const complaintService = {
   },
 
   /** Result when model weights are not configured */
-  _modelNotConfiguredResult(data) {
+  _modelNotConfiguredResult(data, confidenceThreshold = 0.50) {
     return {
       damageType: 'Model Not Configured',
       damageCode: null,
@@ -231,6 +242,7 @@ export const complaintService = {
       status: 'model_not_configured',
       boundingBoxes: [],
       detectionCount: 0,
+      confidenceThreshold,
       isBackendResult: true,
       backendUnavailable: false,
       dimensions: null,
@@ -238,7 +250,7 @@ export const complaintService = {
   },
 
   /** Result when image is invalid or unreadable */
-  _invalidImageResult(data) {
+  _invalidImageResult(data, confidenceThreshold = 0.50) {
     return {
       damageType: 'Invalid Image',
       damageCode: null,
@@ -249,6 +261,7 @@ export const complaintService = {
       status: 'invalid_image',
       boundingBoxes: [],
       detectionCount: 0,
+      confidenceThreshold,
       isBackendResult: true,
       backendUnavailable: false,
       dimensions: null,
@@ -453,8 +466,15 @@ export const complaintService = {
    * @param {string} id
    * @returns {object | null}
    */
-  getComplaintById(id) {
+  async getComplaintById(id) {
     if (!id) return null
+    try {
+      const { data } = await apiClient.get(`/complaints/${encodeURIComponent(id)}`)
+      return this._enrichComplaint(data)
+    } catch {
+      // The offline report tracker remains usable when the API is unavailable.
+    }
+
     const all = getSavedComplaints()
     const norm = id.trim().toLowerCase()
     const found = all.find(
@@ -462,29 +482,228 @@ export const complaintService = {
     )
 
     if (found) {
-      return {
-        ...found,
-        imageUrl: found.imageUrl || '/sample-pothole.jpg',
-        repairOfficer: found.repairOfficer || {
-          name: 'Ramesh Kumar',
-          title: 'Senior Field Repair Officer',
-          department: 'Zone-C Rapid Pavement Unit, Pune Municipal Corp',
-          phone: '+91 98111 54321',
-          email: 'engineer@smartroad.gov',
-          badgeId: 'PMC-ENG-082',
-        },
-        workOrder: found.workOrder || {
-          id: `WO-PN-2026-${found.id.slice(-3)}`,
-          crewSize: 6,
-          equipment: 'Milling machine, Bitumen sprayer, 3-ton vibratory roller',
-          materials: '1.8 tonnes Hot Mix Asphalt (VG-30 grade)',
-          scheduledDate: found.estimatedFix || '15 Oct 2026',
-        },
-        boundingBoxes: found.boundingBoxes || [],
-      }
+      return this._enrichComplaint(found)
     }
 
     return null
+  },
+
+  /**
+   * Fetch all complaints from the real backend API.
+   * Caches results locally for offline resilience.
+   * @param {object} params
+   * @returns {Promise<Array<object>>}
+   */
+  async fetchComplaints(params = {}) {
+    try {
+      const res = await apiClient.get('/complaints', { params, timeout: 8000 })
+      if (Array.isArray(res.data) && res.data.length > 0) {
+        localStorage.setItem(LOCAL_COMPLAINTS_KEY, JSON.stringify(res.data))
+        return res.data
+      }
+    } catch (err) {
+      console.warn('[complaintService] Failed to fetch complaints from backend, using cached local data:', err.message)
+    }
+    return getSavedComplaints()
+  },
+
+  /**
+   * Engineer accepts / takes charge of an open complaint.
+   * @param {string} id
+   * @param {{ engineerName: string, squad?: string, note?: string }} payload
+   */
+  async acceptComplaint(id, { engineerName = 'Er. Rajesh Kulkarni', squad = 'Ward 14 Rapid Squad', note = '' } = {}) {
+    try {
+      const res = await apiClient.put(`/complaints/${encodeURIComponent(id)}/accept`, {
+        engineerName,
+        squad,
+        note: note || `Complaint accepted by ${engineerName} for field repair.`,
+      })
+      this._updateLocalComplaint(res.data)
+      return { success: true, complaint: res.data }
+    } catch (err) {
+      console.warn('[complaintService] Accept API failed, updating locally:', err.message)
+      const all = getSavedComplaints()
+      const idx = all.findIndex(c => c.id === id || c.incidentId === id)
+      if (idx >= 0) {
+        all[idx] = {
+          ...all[idx],
+          assignedEngineer: engineerName,
+          assignedSquad: squad,
+          status: 'In Progress',
+          repairProgress: Math.max(all[idx].repairProgress || 0, 15),
+          dispatchNote: note || `Complaint accepted by ${engineerName} for field repair.`,
+        }
+        localStorage.setItem(LOCAL_COMPLAINTS_KEY, JSON.stringify(all))
+        return { success: true, complaint: all[idx] }
+      }
+      throw err
+    }
+  },
+
+  /**
+   * Engineer updates repair progress percentage (0 - 100%).
+   * Auto-resolves when progress reaches 100%.
+   * @param {string} id
+   * @param {{ repairProgress: number, status?: string, note?: string, estimatedFix?: string, afterImageUrl?: string }} payload
+   */
+  async updateRepairProgress(id, { repairProgress, status, note, estimatedFix, afterImageUrl } = {}) {
+    try {
+      const res = await apiClient.put(`/complaints/${encodeURIComponent(id)}/repair-progress`, {
+        repairProgress,
+        status,
+        note,
+        estimatedFix,
+        afterImageUrl,
+      })
+      this._updateLocalComplaint(res.data)
+      return { success: true, complaint: res.data }
+    } catch (err) {
+      console.warn('[complaintService] Update progress API failed, updating locally:', err.message)
+      const all = getSavedComplaints()
+      const idx = all.findIndex(c => c.id === id || c.incidentId === id)
+      if (idx >= 0) {
+        const nextStatus = repairProgress >= 100 ? 'Resolved' : (status || (all[idx].status === 'Pending' ? 'In Progress' : all[idx].status))
+        all[idx] = {
+          ...all[idx],
+          repairProgress,
+          status: nextStatus,
+          statusNote: note || all[idx].statusNote,
+          estimatedFix: estimatedFix || all[idx].estimatedFix,
+        }
+        localStorage.setItem(LOCAL_COMPLAINTS_KEY, JSON.stringify(all))
+        return { success: true, complaint: all[idx] }
+      }
+      throw err
+    }
+  },
+
+  /**
+   * Update complaint status (Admin / Engineer).
+   * @param {string} id
+   * @param {{ status: string, note?: string }} payload
+   */
+  async updateComplaintStatus(id, { status, note } = {}) {
+    try {
+      const res = await apiClient.put(`/admin/complaints/${encodeURIComponent(id)}/status`, {
+        status,
+        note,
+      })
+      this._updateLocalComplaint(res.data)
+      return { success: true, complaint: res.data }
+    } catch (err) {
+      console.warn('[complaintService] Update status API failed, updating locally:', err.message)
+      const all = getSavedComplaints()
+      const idx = all.findIndex(c => c.id === id || c.incidentId === id)
+      if (idx >= 0) {
+        all[idx] = { ...all[idx], status, statusNote: note || all[idx].statusNote }
+        localStorage.setItem(LOCAL_COMPLAINTS_KEY, JSON.stringify(all))
+        return { success: true, complaint: all[idx] }
+      }
+      throw err
+    }
+  },
+
+  /**
+   * Fetch aggregated live statistics across all municipal complaints.
+   */
+  async fetchStatsSummary() {
+    try {
+      const res = await apiClient.get('/complaints/stats/summary', { timeout: 5000 })
+      return res.data
+    } catch (err) {
+      console.warn('[complaintService] Stats summary API failed, calculating from local cache:', err.message)
+      const all = getSavedComplaints()
+      return {
+        total_complaints: all.length,
+        pending: all.filter(c => (c.status || '').toLowerCase().includes('pending')).length,
+        in_progress: all.filter(c => (c.status || '').toLowerCase().includes('progress')).length,
+        scheduled: all.filter(c => (c.status || '').toLowerCase().includes('scheduled')).length,
+        resolved: all.filter(c => (c.status || '').toLowerCase().includes('resolved') || (c.status || '').toLowerCase().includes('completed')).length,
+        critical: all.filter(c => (c.severity || '').toLowerCase() === 'critical').length,
+        high: all.filter(c => (c.severity || '').toLowerCase() === 'high').length,
+        medium: all.filter(c => (c.severity || '').toLowerCase() === 'medium').length,
+        low: all.filter(c => (c.severity || '').toLowerCase() === 'low').length,
+        average_priority: Math.round(all.reduce((acc, c) => acc + (c.priority || c.priorityScore || 50), 0) / (all.length || 1)),
+        high_priority_count: all.filter(c => (c.priority || c.priorityScore || 50) >= 70).length,
+      }
+    }
+  },
+
+  /**
+   * Adapter: Normalizes a ComplaintModel/Response into the structure expected by Engineer views.
+   */
+  complaintToIssue(c) {
+    if (!c) return null
+    const lat = c.latitude ?? (Array.isArray(c.coordinates) ? c.coordinates[0] : 18.5204)
+    const lng = c.longitude ?? (Array.isArray(c.coordinates) ? c.coordinates[1] : 73.8567)
+    const priorityScore = c.priorityScore ?? c.priority ?? 50
+    let priorityLevel = 'Low'
+    if (priorityScore >= 85) priorityLevel = 'Critical'
+    else if (priorityScore >= 70) priorityLevel = 'High'
+    else if (priorityScore >= 50) priorityLevel = 'Medium'
+
+    return {
+      id: c.id,
+      complaintId: c.id,
+      incidentId: c.incidentId || `INC-2026-${c.id.slice(-4)}`,
+      damageType: c.damageType || 'Pothole',
+      location: c.location || 'Pune City Road',
+      ward: c.ward || 'Ward 14 (Shivajinagar - Deccan)',
+      coordinates: [lat, lng],
+      latitude: lat,
+      longitude: lng,
+      severity: (c.severity || 'medium').toLowerCase(),
+      srps: priorityScore,
+      priority: priorityScore,
+      priorityLevel,
+      status: c.status || 'Pending',
+      repairProgress: c.repairProgress || 0,
+      assignedDate: c.date || 'Recent',
+      assignedEngineer: c.assignedEngineer || null,
+      assignedSquad: c.assignedSquad || 'Rapid Response Squad',
+      imageUrl: c.imageUrl || '/sample-pothole.jpg',
+      roadImage: c.imageUrl || '/sample-pothole.jpg',
+      aiConfidence: c.aiConfidence || '92.4%',
+      aiDetection: {
+        confidence: c.aiConfidence ? parseFloat(c.aiConfidence) : 92.4,
+        class: c.damageType || 'Pothole',
+      },
+      boundingBoxes: c.boundingBoxes || [],
+      description: c.description || 'Road surface damage requiring attention.',
+      notes: c.statusNote || c.dispatchNote || '',
+      statusNote: c.statusNote || '',
+      dispatchNote: c.dispatchNote || '',
+      estimatedFix: c.estimatedFix || 'Scheduled within 48 hrs',
+      rawComplaint: c,
+    }
+  },
+
+  _updateLocalComplaint(complaint) {
+    saveComplaintLocally(complaint)
+  },
+
+  _enrichComplaint(found) {
+    return {
+      ...found,
+      imageUrl: found.imageUrl || '/sample-pothole.jpg',
+      repairOfficer: found.repairOfficer || {
+        name: 'Ramesh Kumar',
+        title: 'Senior Field Repair Officer',
+        department: 'Zone-C Rapid Pavement Unit, Pune Municipal Corp',
+        phone: '+91 98111 54321',
+        email: 'engineer@smartroad.gov',
+        badgeId: 'PMC-ENG-082',
+      },
+      workOrder: found.workOrder || {
+        id: `WO-PN-2026-${found.id.slice(-3)}`,
+        crewSize: 6,
+        equipment: 'Milling machine, Bitumen sprayer, 3-ton vibratory roller',
+        materials: '1.8 tonnes Hot Mix Asphalt (VG-30 grade)',
+        scheduledDate: found.estimatedFix || '15 Oct 2026',
+      },
+      boundingBoxes: found.boundingBoxes || [],
+    }
   },
 }
 

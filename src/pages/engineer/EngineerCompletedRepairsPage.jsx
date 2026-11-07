@@ -30,6 +30,7 @@ import {
   ArrowRight,
 } from 'lucide-react'
 import { MOCK_ENGINEER_ISSUES } from '../../data/mockEngineerData'
+import complaintService from '../../services/complaintService'
 
 const STORAGE_KEY = 'rds_engineer_issues'
 
@@ -41,15 +42,29 @@ export default function EngineerCompletedRepairsPage() {
   const [sliderPosition, setSliderPosition] = useState(50) // 0-100%
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      setIssues(stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES)
-    } catch {
-      setIssues(MOCK_ENGINEER_ISSUES)
+    let active = true
+    const loadData = async () => {
+      try {
+        const raw = await complaintService.fetchComplaints()
+        const normalized = (raw || []).map(complaintService.complaintToIssue)
+        if (active) {
+          setIssues(normalized)
+        }
+      } catch (err) {
+        console.warn('Completed repairs fetch failed:', err)
+        if (active) {
+          const stored = localStorage.getItem(STORAGE_KEY)
+          setIssues(stored ? JSON.parse(stored) : MOCK_ENGINEER_ISSUES)
+        }
+      }
     }
+    loadData()
+    return () => { active = false }
   }, [])
 
-  const resolvedIssues = issues.filter((i) => i.status === 'Resolved')
+  const resolvedIssues = issues.filter(
+    (i) => (i.status || '').toLowerCase().includes('resolved') || (i.status || '').toLowerCase().includes('completed')
+  )
 
   const filtered = resolvedIssues.filter((i) => {
     if (damageFilter !== 'all' && i.damageType !== damageFilter) return false

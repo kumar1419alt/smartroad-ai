@@ -56,19 +56,26 @@ export default function CitizenComplaintDetailPage() {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    const data = complaintService.getComplaintById(id)
-    if (data) {
-      setComplaint(data)
-    } else {
-      // Fallback: use first mock complaint if direct id match fails
-      const fallback = complaintService.getComplaintById('PMC-2026-0421')
-      if (fallback) {
-        setComplaint({
-          ...fallback,
-          id: id || fallback.id,
-        })
+    let active = true
+
+    const loadComplaint = async () => {
+      const data = await complaintService.getComplaintById(id)
+      if (!active) return
+      if (data) {
+        setComplaint(data)
+      } else {
+        const fallback = await complaintService.getComplaintById('PMC-2026-0421')
+        if (active && fallback) {
+          setComplaint({
+            ...fallback,
+            id: id || fallback.id,
+          })
+        }
       }
     }
+
+    loadComplaint()
+    return () => { active = false }
   }, [id])
 
   if (!complaint) {
