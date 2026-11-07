@@ -33,6 +33,7 @@ import ProtectedRoute from './components/auth/ProtectedRoute'
 import RoleRoute from './components/auth/RoleRoute'
 import AppLayout from './components/layout/AppLayout'
 import LoadingSpinner from './components/ui/LoadingSpinner'
+import ErrorBoundary from './components/common/ErrorBoundary'
 import { USER_ROLES } from './constants'
 
 // Lazy-load page components for code splitting
@@ -89,11 +90,12 @@ function PageLoader() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <ToastProvider>
-          <Suspense fallback={<PageLoader />}>
-          <Routes>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <ToastProvider>
+            <Suspense fallback={<PageLoader />}>
+            <Routes>
             {/* Public landing page */}
             <Route index element={<LandingPage />} />
 
@@ -197,5 +199,6 @@ export default function App() {
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>
+    </ErrorBoundary>
   )
 }

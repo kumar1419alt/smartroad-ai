@@ -144,7 +144,10 @@ export default function LocationPicker({
     return () => {
       clearTimeout(timer)
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove()
+        try {
+          mapInstanceRef.current.stop()
+          mapInstanceRef.current.remove()
+        } catch (e) {}
         mapInstanceRef.current = null
       }
     }

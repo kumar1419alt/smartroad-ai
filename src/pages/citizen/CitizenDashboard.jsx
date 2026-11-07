@@ -17,7 +17,7 @@
  *     - Complaint ID, damage type, location, severity, priority, status, date (using reusable ComplaintTable)
  */
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   PlusCircle,

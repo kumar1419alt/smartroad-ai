@@ -29,95 +29,115 @@ export default function MiniRoadMap({
 }) {
   const mapContainerRef = useRef(null)
   const mapInstanceRef = useRef(null)
+  const layerGroupRef = useRef(null)
   const [selectedIssue, setSelectedIssue] = useState(null)
 
   useEffect(() => {
     if (!mapContainerRef.current) return
+    let map = mapInstanceRef.current
 
-    // Avoid duplicate initialization
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove()
-      mapInstanceRef.current = null
+    if (!map) {
+      try {
+        map = L.map(mapContainerRef.current, {
+          center: center,
+          zoom: zoom,
+          scrollWheelZoom: false,
+          zoomControl: true,
+          attributionControl: false,
+        })
+        mapInstanceRef.current = map
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+        }).addTo(map)
+
+        layerGroupRef.current = L.layerGroup().addTo(map)
+      } catch (err) {
+        console.warn('MiniRoadMap init error:', err)
+        return
+      }
     }
 
-    // Initialize Leaflet map
-    const map = L.map(mapContainerRef.current, {
-      center: center,
-      zoom: zoom,
-      scrollWheelZoom: false,
-      zoomControl: true,
-      attributionControl: false,
-    })
+    if (layerGroupRef.current) {
+      layerGroupRef.current.clearLayers()
 
-    mapInstanceRef.current = map
+      complaints.forEach((item) => {
+        if (!item.coordinates || item.coordinates.length !== 2) return
 
-    // Base tile layer — clean OpenStreetMap
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-    }).addTo(map)
+        const isResolved = (item.status || '').toLowerCase().includes('resolved')
+        const color = isResolved
+          ? SEVERITY_COLORS.resolved
+          : SEVERITY_COLORS[item.severity] || '#3b82f6'
 
-    // Add markers for each complaint with coordinates
-    complaints.forEach((item) => {
-      if (!item.coordinates || item.coordinates.length !== 2) return
+        const marker = L.circleMarker(item.coordinates, {
+          radius: isResolved ? 7 : 9,
+          fillColor: color,
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.9,
+        })
 
-      const isResolved = (item.status || '').toLowerCase().includes('resolved')
-      const color = isResolved
-        ? SEVERITY_COLORS.resolved
-        : SEVERITY_COLORS[item.severity] || '#3b82f6'
-
-      // Custom pulsing SVG circle marker
-      const marker = L.circleMarker(item.coordinates, {
-        radius: isResolved ? 7 : 9,
-        fillColor: color,
-        color: '#ffffff',
-        weight: 2,
-        opacity: 1,
-        fillOpacity: 0.9,
-      }).addTo(map)
-
-      const popupContent = `
-        <div style="font-family: inherit; font-size: 12px; min-width: 170px; line-height: 1.4;">
-          <div style="font-weight: 700; color: #0f172a; margin-bottom: 2px;">${item.id}</div>
-          <div style="font-weight: 600; color: #2563eb; font-size: 11px;">${item.damageType}</div>
-          <div style="color: #64748b; font-size: 11px; margin: 3px 0 6px 0;">${item.location}</div>
-          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 4px;">
-            <span style="font-size: 10px; font-weight: 600; color: #475569;">SRPS: ${item.priority}/100</span>
-            <span style="font-size: 10px; font-weight: 700; color: ${color};">${item.status}</span>
+        const popupContent = `
+          <div style="font-family: inherit; font-size: 12px; min-width: 170px; line-height: 1.4;">
+            <div style="font-weight: 700; color: #0f172a; margin-bottom: 2px;">${item.id}</div>
+            <div style="font-weight: 600; color: #2563eb; font-size: 11px;">${item.damageType}</div>
+            <div style="color: #64748b; font-size: 11px; margin: 3px 0 6px 0;">${item.location}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 4px;">
+              <span style="font-size: 10px; font-weight: 600; color: #475569;">SRPS: ${item.priority || item.priorityScore || 50}/100</span>
+              <span style="font-size: 10px; font-weight: 700; color: ${color};">${item.status || 'Pending'}</span>
+            </div>
           </div>
-        </div>
-      `
+        `
 
-      marker.bindPopup(popupContent)
+        marker.bindPopup(popupContent)
 
-      marker.on('click', () => {
-        setSelectedIssue(item)
-        if (onSelectComplaint) onSelectComplaint(item)
+        marker.on('click', () => {
+          setSelectedIssue(item)
+          if (onSelectComplaint) onSelectComplaint(item)
+        })
+
+        layerGroupRef.current.addLayer(marker)
       })
-    })
 
-    // Auto-fit bounds if we have multiple valid coordinates
-    const validCoords = complaints
-      .filter((c) => c.coordinates && c.coordinates.length === 2)
-      .map((c) => c.coordinates)
+      const validCoords = complaints
+        .filter((c) => c.coordinates && c.coordinates.length === 2)
+        .map((c) => c.coordinates)
 
-    if (validCoords.length > 0) {
-      const bounds = L.latLngBounds(validCoords)
-      map.fitBounds(bounds, { padding: [30, 30] })
+      if (validCoords.length > 0) {
+        try {
+          const bounds = L.latLngBounds(validCoords)
+          map.fitBounds(bounds, { padding: [30, 30], animate: false })
+        } catch (e) {
+          // ignore bounds calculation error
+        }
+      }
     }
 
-    // Invalidate size to guarantee crisp rendering
     const timer = setTimeout(() => {
-      map.invalidateSize()
+      try {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize()
+        }
+      } catch (e) {}
     }, 250)
 
     return () => {
       clearTimeout(timer)
+    }
+  }, [complaints])
+
+  useEffect(() => {
+    return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove()
+        try {
+          mapInstanceRef.current.stop()
+          mapInstanceRef.current.remove()
+        } catch (e) {}
         mapInstanceRef.current = null
       }
     }
-  }, [complaints])
+  }, [])
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col h-full">

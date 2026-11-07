@@ -107,7 +107,10 @@ export default function ComplaintDetailDrawer({
 
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove()
+        try {
+          mapInstanceRef.current.stop()
+          mapInstanceRef.current.remove()
+        } catch (e) {}
         mapInstanceRef.current = null
       }
     }
